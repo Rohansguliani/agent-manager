@@ -1,0 +1,304 @@
+================================================================================
+AGENT MANAGER GUI - DEVELOPMENT ROADMAP
+================================================================================
+
+PROJECT GOAL:
+Build a fast, native Rust-based GUI tool for managing CLI agents (Gemini CLI,
+Claude Code, etc.) with features for creating agents, subagents, and 
+orchestrating multiple CLI tools simultaneously.
+
+TECH STACK:
+- GUI: egui + eframe (Pure Rust, immediate mode GUI)
+- Backend: Rust (Tokio for async operations)
+- Agent Framework: Custom build with Rusty Agent (for LLM integration)
+- Process Management: tokio::process for CLI agent spawning
+
+================================================================================
+PHASE 1: MVP - HELLO WORLD GUI (CURRENT PHASE)
+================================================================================
+
+✅ Step 1: Install Rust and Cargo
+   - Install rustup
+   - Verify installation
+   - Install Xcode Command Line Tools
+
+✅ Step 2: Create Project Structure
+   - Initialize cargo project
+   - Set up basic project structure
+
+⏳ Step 3: Basic GUI Setup
+   - Update Cargo.toml with egui and eframe dependencies
+   - Create hello world GUI window
+   - Verify GUI opens and displays correctly
+
+================================================================================
+PHASE 2: CORE GUI FOUNDATION
+================================================================================
+
+□ Step 4: Basic UI Layout
+   - Create main window with panels (sidebar, main content area)
+   - Implement basic navigation structure
+   - Add menu bar (File, Edit, View, Help)
+
+□ Step 5: UI Components Library
+   - Button components
+   - Text input fields
+   - List/table views for agents
+   - Status indicators
+   - Terminal output display area
+
+□ Step 6: State Management
+   - Implement app state structure
+   - Agent registry (list of agents)
+   - Current selected agent state
+   - UI state management
+
+================================================================================
+PHASE 3: AGENT MANAGEMENT CORE
+================================================================================
+
+□ Step 7: Agent Model
+   - Define Agent struct (id, name, type, status, config)
+   - Agent configuration structure
+   - Agent lifecycle states (Idle, Running, Stopped, Error)
+
+□ Step 8: Agent Registry
+   - In-memory agent storage
+   - Agent CRUD operations (Create, Read, Update, Delete)
+   - Agent persistence (save/load from file)
+
+□ Step 9: Agent UI Components
+   - Agent list view (sidebar)
+   - Agent details panel
+   - Create new agent dialog
+   - Edit agent configuration
+
+================================================================================
+PHASE 4: CLI INTEGRATION
+================================================================================
+
+□ Step 10: Process Management
+   - Spawn CLI processes (tokio::process)
+   - Process lifecycle management (start, stop, restart)
+   - Process status monitoring
+
+□ Step 11: Terminal Output Capture
+   - Capture stdout/stderr from CLI processes
+   - Stream output to GUI terminal widget
+   - Buffer management for large outputs
+
+□ Step 12: Input to Processes
+   - Send input to running CLI processes
+   - Handle interactive CLI agents
+   - Command history
+
+□ Step 13: Multiple CLI Support
+   - Support for Gemini CLI
+   - Support for Claude Code
+   - Generic CLI agent adapter
+   - CLI detection and configuration
+
+================================================================================
+PHASE 5: AGENT COMMUNICATION & PROMPTING
+================================================================================
+
+□ Step 14: Prompt Interface
+   - Text input for sending prompts to agents
+   - Prompt history
+   - Prompt templates
+
+□ Step 15: Agent Response Handling
+   - Display agent responses in GUI
+   - Response formatting
+   - Markdown rendering (if needed)
+
+□ Step 16: Multi-Agent Communication
+   - Agent-to-agent messaging
+   - Broadcast messages
+   - Agent collaboration workflows
+
+================================================================================
+PHASE 6: SUBAGENT SYSTEM
+================================================================================
+
+□ Step 17: Subagent Hierarchy
+   - Parent-child agent relationships
+   - Subagent creation UI
+   - Subagent tree view
+
+□ Step 18: Subagent Management
+   - Spawn subagents from parent agents
+   - Subagent lifecycle tied to parent
+   - Subagent resource isolation
+
+□ Step 19: Subagent Orchestration
+   - Coordinate subagent tasks
+   - Subagent result aggregation
+   - Error handling and propagation
+
+================================================================================
+PHASE 7: ORCHESTRATION & WORKFLOWS
+================================================================================
+
+□ Step 20: Agent Workflows
+   - Define multi-agent workflows
+   - Workflow execution engine
+   - Workflow visualization
+
+□ Step 21: Task Scheduling
+   - Schedule agent tasks
+   - Task dependencies
+   - Parallel execution support
+
+□ Step 22: Resource Management
+   - Monitor CPU/memory usage per agent
+   - Resource limits and throttling
+   - Process isolation
+
+================================================================================
+PHASE 8: ADVANCED FEATURES
+================================================================================
+
+□ Step 23: Logging & Monitoring
+   - Centralized logging system
+   - Log aggregation from all agents
+   - Log search and filtering
+   - Real-time log streaming
+
+□ Step 24: Configuration Management
+   - Agent configuration presets
+   - Export/import configurations
+   - Configuration validation
+
+□ Step 25: Persistence
+   - Save agent states
+   - Restore sessions
+   - Project-based agent management
+
+□ Step 26: Performance Optimization
+   - Optimize GUI rendering
+   - Efficient state updates
+   - Memory management
+   - Startup performance
+
+================================================================================
+PHASE 9: POLISH & UX
+================================================================================
+
+□ Step 27: Error Handling
+   - User-friendly error messages
+   - Error recovery
+   - Error logging
+
+□ Step 28: Keyboard Shortcuts
+   - Common actions shortcuts
+   - Customizable shortcuts
+   - Shortcut help dialog
+
+□ Step 29: Themes & Customization
+   - Dark/light themes
+   - UI customization options
+   - User preferences
+
+□ Step 30: Documentation
+   - In-app help
+   - Tooltips and hints
+   - User guide
+
+================================================================================
+FUTURE ENHANCEMENTS (POST-MVP)
+================================================================================
+
+□ Plugin System
+   - Extensible agent types
+   - Custom agent plugins
+   - Plugin marketplace
+
+□ Cloud Integration
+   - Remote agent execution
+   - Agent sharing
+   - Cloud-backed storage
+
+□ Collaboration Features
+   - Multi-user support
+   - Agent sharing
+   - Team workflows
+
+□ AI-Powered Features
+   - Agent recommendations
+   - Auto-configuration
+   - Intelligent orchestration
+
+================================================================================
+DEVELOPMENT WORKFLOW
+================================================================================
+
+1. Fast Iteration Setup:
+   - Use `cargo watch -x 'run'` for auto-rebuild on save
+   - Test GUI changes immediately
+   - Iterate quickly on UI components
+
+2. Testing Strategy:
+   - Unit tests for agent management logic
+   - Integration tests for CLI integration
+   - Manual testing for GUI components
+
+3. Code Organization:
+   - src/
+     - main.rs (GUI app entry point)
+     - agent/ (agent management logic)
+     - cli/ (CLI integration)
+     - ui/ (UI components)
+     - state/ (state management)
+     - utils/ (utility functions)
+
+4. Version Control:
+   - Commit after each phase completion
+   - Feature branches for major features
+   - Keep main branch stable
+
+================================================================================
+KEY MILESTONES
+================================================================================
+
+Milestone 1: Basic GUI (Phase 1-2)
+  - Hello world GUI works
+  - Basic UI layout established
+  - Can navigate between views
+
+Milestone 2: Agent Management (Phase 3)
+  - Can create/edit/delete agents
+  - Agent list displays correctly
+  - Agent state persists
+
+Milestone 3: CLI Integration (Phase 4)
+  - Can spawn CLI processes
+  - Terminal output displays
+  - Can send input to processes
+
+Milestone 4: Agent Communication (Phase 5)
+  - Can send prompts to agents
+  - Responses display correctly
+  - Multi-agent communication works
+
+Milestone 5: Subagents (Phase 6)
+  - Can create subagents
+  - Subagent hierarchy works
+  - Subagent orchestration functional
+
+Milestone 6: Production Ready (Phase 7-9)
+  - All core features working
+  - Polished UX
+  - Error handling complete
+  - Documentation in place
+
+================================================================================
+CURRENT STATUS
+================================================================================
+
+Phase: 1 - MVP Setup
+Current Step: 3 - Basic GUI Setup (Updating Cargo.toml)
+Next: Complete hello world GUI and verify it runs
+
+================================================================================
+

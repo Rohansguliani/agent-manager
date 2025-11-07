@@ -1,0 +1,76 @@
+HOVER AND SCROLLAREA FIX ATTEMPTS - WHY IT'S HARD
+==================================================
+
+THE TWO PROBLEMS:
+1. ScrollArea not filling entire sidebar height
+2. Hover effects not working on agent rows
+
+WHY IT'S HARD:
+==============
+
+1. IMMEDIATE MODE GUI RENDERING ORDER
+   - egui is an immediate mode GUI framework
+   - Rendering order matters: widgets render, then painter draws
+   - Problem: To check hover, you need the widget's rect
+   - To get the rect, you must render the widget first
+   - But to draw background BEHIND the widget, you need to draw BEFORE rendering
+   - This creates a chicken-and-egg problem
+
+2. HOVER DETECTION CHALLENGE
+   Current approach tried:
+   - Render row content → get rect → check hover → draw background
+   - Problem: Background drawn AFTER widgets = draws ON TOP of text
+   
+   Frame approach tried:
+   - Frame.draw() draws background BEHIND content (good!)
+   - But need hover state BEFORE calling frame.show()
+   - Can't know hover until AFTER rendering
+   - Tried two-pass: render once to detect hover, render again with Frame
+   - Problem: Double rendering = inefficient + visual artifacts
+   
+   Interaction approach tried:
+   - ui.interact(rect, id, sense) to check hover
+   - Need rect first, so render content
+   - Then check hover, then draw background
+   - Background still draws on top
+
+3. SCROLLAREA HEIGHT ISSUE
+   - ScrollArea by default only takes space needed for content
+   - auto_shrink([false; 2]) should prevent shrinking
+   - max_height(available_height) should limit to available space
+   - Problem: SidePanel might not be providing correct available_height
+   - Or ScrollArea is still calculating based on content size
+   - Tried: ui.allocate_space() at end to force expansion
+   - Problem: allocate_space returns (Id, Response), not just consuming space
+
+WHAT NEEDS TO HAPPEN:
+=====================
+
+For Hover:
+- Need to detect hover state BEFORE rendering the row
+- Or find a way to draw background behind already-rendered widgets
+- Possible solutions:
+  a) Store hover state per-row and use it next frame (1-frame delay)
+  b) Use egui's built-in selectable_label widget (handles hover automatically)
+  c) Use Area or similar container that handles interaction better
+  d) Accept that hover background draws on top (make it very subtle)
+
+For ScrollArea:
+- Need ScrollArea to explicitly fill remaining vertical space in SidePanel
+- SidePanel should reserve space for header, give rest to ScrollArea
+- May need to calculate exact height: panel_height - header_height
+- Or use a different layout approach (vertical layout with ScrollArea as flexible)
+
+CURRENT STATUS:
+===============
+- ScrollArea: Added max_height(available_height) but may not be working
+- Hover: Drawing background after widgets, may obscure text
+- Both features compile but may not work correctly in practice
+
+WHAT TO TRY NEXT:
+=================
+1. Use selectable_label or button for entire row (handles hover automatically)
+2. Calculate exact ScrollArea height: ui.available_height() - header_height
+3. Use egui::Area for row container (better interaction handling)
+4. Accept Frame-based approach with 1-frame hover delay (store state)
+
