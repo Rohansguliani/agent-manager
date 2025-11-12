@@ -1,0 +1,39 @@
+FROM rust:latest
+
+WORKDIR /app
+
+# Install system dependencies (Node.js, curl) and Rust tools
+# Install Node.js (required for Gemini CLI)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get update && \
+    apt-get install -y nodejs curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install cargo-watch for hot reloading
+RUN cargo install cargo-watch --version 8.4.0
+
+# Install Gemini CLI globally
+RUN npm install -g @google/gemini-cli
+
+# Verify Gemini CLI installation
+RUN gemini --version
+
+# Copy manifests first for better caching
+COPY Cargo.toml Cargo.lock* ./
+
+# This will be cached if Cargo.toml/Cargo.lock haven't changed
+# We create dummy source files to build dependencies
+RUN mkdir -p src/bin && \
+    echo "fn main() {}" > src/main.rs && \
+    echo "fn main() {}" > src/bin/test_gemini.rs && \
+    cargo build --release || true && \
+    rm -rf src
+
+# Copy source
+COPY . .
+
+EXPOSE 8080
+
+# Use cargo watch for hot reloading in development
+CMD ["cargo", "watch", "-x", "run"]
+

@@ -1,0 +1,9 @@
+# Local development - HTTP and HTTPS with self-signed certificate
+local.agentManager.dev {
+    # Use internal/self-signed certificate for local development
+    tls internal
+    
+    # Reverse proxy to frontend
+    reverse_proxy localhost:3001
+}
+

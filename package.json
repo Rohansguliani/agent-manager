@@ -1,0 +1,34 @@
+{
+  "name": "agent-manager-gui",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "prepare": "husky",
+    "lint:backend": "cd backend && cargo clippy -- -D warnings",
+    "lint:frontend": "cd frontend && npm run lint",
+    "type-check:frontend": "cd frontend && npm run type-check",
+    "test:backend": "cd backend && cargo test",
+    "test:frontend": "cd frontend && npm test",
+    "format:backend": "cd backend && cargo fmt",
+    "format:frontend": "cd frontend && npm run lint:fix",
+    "check:all": "npm run lint:backend && npm run lint:frontend && npm run type-check:frontend && npm run test:backend"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.46.4",
+    "@typescript-eslint/parser": "^8.46.4",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react": "^7.37.5",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.11"
+  },
+  "lint-staged": {
+    "backend/**/*.rs": [
+      "bash -c 'cd backend && cargo fmt'",
+      "bash -c 'cd backend && cargo clippy -- -D warnings'"
+    ],
+    "frontend/src/**/*.{ts,tsx}": [
+      "bash -c 'cd frontend && npm run lint:fix'",
+      "bash -c 'cd frontend && npm run type-check'"
+    ]
+  }
+}

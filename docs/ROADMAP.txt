@@ -1,0 +1,902 @@
+================================================================================
+AGENT MANAGER GUI - DEVELOPMENT ROADMAP
+================================================================================
+
+================================================================================
+OVERALL PROJECT IDEA
+================================================================================
+
+Vision: A native, local-first "Agentic Control Panel" with remote access 
+capabilities, enabling users to manage CLI-based AI agents from anywhere via 
+a beautiful web interface on their phone, tablet, or other machines.
+
+Core Concept:
+- Native desktop application running locally that manages CLI agents (Ollama, Gemini CLI, Claude Code, etc.)
+- Rust backend server that exposes a REST API and WebSocket server
+- Beautiful React web frontend accessible from any device (phone, tablet, laptop, desktop)
+- Remote access to manage local CLI agents from anywhere on your network or over the internet
+- Local-first architecture: agents run locally, data stored locally, but accessible remotely
+- Multi-agent orchestration with intelligent task planning and execution
+- Support for complex workflows with agent collaboration and sub-agent hierarchies
+- Real-time updates via WebSocket for seamless remote management experience
+
+Target Users:
+- Developers working with multiple LLM CLI tools who want remote access
+- Users who want to manage agents from their phone or tablet while away from their computer
+- Teams managing agent-based workflows who need remote collaboration
+- Users needing visual orchestration of CLI agents with mobile/remote access
+- Organizations requiring local-first, privacy-focused agent management with remote capabilities
+
+Key Differentiators:
+- Remote access: Manage local CLI agents from phone, tablet, or any device via web interface
+- Local-first architecture: Agents run locally, data stored locally (privacy-focused)
+- Beautiful web UI: Modern React interface accessible from any device
+- Real-time updates: WebSocket support for live agent status and output streaming
+- Multi-agent orchestration: Not just single agent management, but complex workflows
+- Visual workflow builder: Drag-and-drop agent orchestration (future)
+- Extensible architecture: Plugin system for custom agents
+- Cross-platform: Native backend (macOS, Linux, Windows) with web frontend (any device)
+- Secure remote access: Optional authentication and encryption for remote connections
+
+================================================================================
+STACK CHOICES AND WHY
+================================================================================
+
+ARCHITECTURAL DECISION: React Web Frontend + Rust Backend API
+  Why This Architecture:
+  - Remote access is a core requirement: Users need to manage local CLI agents 
+    from their phone, tablet, or other machines
+  - Web interface is the only way to achieve true cross-device accessibility
+  - Beautiful, modern UI: React enables rich, responsive web interfaces
+  - Real-time updates: WebSocket support for live agent status and output
+  - Mobile-friendly: React web apps work on phones, tablets, laptops, desktops
+  - Local-first backend: Rust backend runs locally, agents execute locally
+  - Privacy-focused: Data stays on local machine, only UI is accessed remotely
+
+  Current Implementation:
+  - Phase 1 (Current): Rust backend API (Axum) with REST + WebSocket
+  - Phase 2 (Current): React frontend that connects to backend API
+  - Web-first approach: React web interface is the primary interface for remote access
+
+Frontend: React + TypeScript
+  Why:
+  - Remote access requirement: Web interface is essential for phone/tablet access
+  - Beautiful UI: Modern React frameworks enable rich, responsive interfaces
+  - Cross-device: Works on any device with a web browser (phone, tablet, laptop, desktop)
+  - Real-time: WebSocket support for live updates and streaming
+  - Ecosystem: Huge ecosystem of UI components and libraries
+  - Mobile-responsive: Can create mobile-friendly interfaces
+  - Future-proof: Web technologies are here to stay
+  Alternatives Considered:
+  - egui + eframe: Native desktop only, cannot access remotely from phone
+  - Tauri: Desktop-focused, limited remote access capabilities
+  - Vue/Svelte: Good alternatives, but React has larger ecosystem
+  Decision: React is the clear choice for remote access requirements
+
+Backend API: Rust + Axum/Actix Web
+  Why:
+  - Native performance: Rust backend for fast, efficient agent management
+  - REST API: Standard HTTP API for agent management operations
+  - WebSocket support: Real-time updates for agent status and output streaming
+  - Local execution: Agents run locally on the machine running the backend
+  - Security: Can implement authentication and encryption for remote access
+  - Cross-platform: Backend runs on macOS, Linux, Windows
+  - Process management: Native Rust process management for CLI agents
+  Framework Choice: Axum (preferred) or Actix Web
+  - Axum: Modern, ergonomic, built on Tokio
+  - Actix Web: More mature, higher performance, but more complex
+
+Frontend: React + TypeScript (Current Implementation)
+  Current Status:
+  - React web interface is the primary interface
+  - Accessible from any device with a web browser
+  - Real-time updates via WebSocket
+  - Mobile-responsive design
+
+Agent Orchestration Framework: AutoAgents (liquidos-ai/AutoAgents)
+  Why:
+  - Built in Rust (native integration)
+  - ReAct executor with streaming support
+  - Multi-agent coordination built-in
+  - Type-safe tool system with derive macros
+  - Support for Ollama (our primary CLI target)
+  - Structured outputs with JSON schema validation
+  - Memory systems (sliding window, persistent storage)
+  - Provider agnostic (OpenAI, Anthropic, Ollama, local models)
+  - Active development and good documentation
+  - WASM support (future browser deployment)
+  Key Features:
+  - Tool system with #[tool] derive macro
+  - ToolRuntime trait for custom tool implementation
+  - ReAct executor for reasoning and acting
+  - Streaming support at executor level
+  - Multi-agent pub/sub communication
+  Alternatives Considered:
+  - Custom orchestrator: Too much work, reinventing the wheel
+  - AgentAI: Simpler but less orchestration features
+  - Rig: Good but less mature tool system
+
+Backend: Rust + Tokio
+  Why:
+  - Native performance
+  - Excellent async support (Tokio)
+  - Memory safety
+  - Cross-platform
+  - Great for system-level operations (process management)
+  - Strong ecosystem for CLI tools
+
+Process Management: tokio::process
+  Why:
+  - Native async process execution
+  - Built into Tokio ecosystem
+  - Good for streaming stdout/stderr
+  - Cross-platform support
+  - Excellent for CLI process management
+  Additional Libraries:
+  - tokio-process-tools: Advanced streaming and pattern matching (if needed)
+  - command-group: Process groups and cleanup (if needed)
+
+State Management: Custom Rust structs + serde
+  Why:
+  - Type-safe state management
+  - Easy serialization/deserialization
+  - Simple persistence (JSON files)
+  - No external dependencies
+  - Works well with egui's immediate mode
+
+Persistence: JSON files (serde_json)
+  Why:
+  - Simple and human-readable
+  - Easy to debug and edit
+  - No external dependencies
+  - Good for MVP
+  Future: Database (SQLite) for production
+
+Future Stack Evolution:
+  Phase 1 (Current): Native desktop app (egui + eframe) - for rapid prototyping
+  Phase 2 (Next): Rust backend API (Axum/Actix Web) - REST API + WebSocket server
+  Phase 3 (Then): React web frontend - beautiful, responsive web interface
+  Phase 4 (Future): Optional desktop mode (egui) + web mode (React) - user choice
+  Backend API: Axum or Actix Web (Rust web framework) - for remote access
+  Frontend: React + TypeScript - for phone/tablet/remote access
+  Key Driver: Remote access requirement necessitates web interface
+
+================================================================================
+WHAT WE CAN DO IN A V1
+================================================================================
+
+V1 Scope (MVP - Minimum Viable Product):
+
+1. Agent Management
+   - Create, edit, delete agents
+   - Agent configuration (command, args, env vars, working directory)
+   - Agent types (Gemini CLI, Claude Code, Ollama, Generic CLI)
+   - Agent status tracking (Idle, Running, Stopped, Error)
+   - Agent persistence (save/load from JSON file)
+
+2. CLI Process Execution
+   - Spawn CLI processes (tokio::process)
+   - Capture stdout/stderr
+   - Stream output to GUI terminal widget
+   - Send input to running processes
+   - Process lifecycle management (start, stop, restart)
+   - Process status monitoring
+
+3. Basic Orchestration
+   - Single agent execution
+   - Simple task execution (send prompt, get response)
+   - Basic error handling
+   - Output display in GUI
+
+4. UI Features
+   - Agent list sidebar
+   - Agent details panel
+   - Terminal output display
+   - Create/edit agent dialogs
+   - Menu bar (File, Edit, View, Help)
+   - Basic status indicators
+
+5. AutoAgents Integration
+   - Basic CLI process tool implementation
+   - Tool registration with AutoAgents
+   - Simple ReAct agent execution
+   - Structured output handling
+
+V1 Limitations (Not Included):
+   - Multi-agent orchestration (complex workflows)
+   - Agent-to-agent communication
+   - Sub-agent hierarchies
+   - Workflow visualization
+   - Advanced error recovery
+   - Resource monitoring
+   - Cloud integration
+   - Web platform
+   - Plugin system
+
+V1 Success Criteria:
+   - User can create and configure agents
+   - User can execute CLI agents and see output
+   - User can send prompts and receive responses
+   - Agent state persists between sessions
+   - Basic error handling works
+   - UI is functional and responsive
+
+================================================================================
+WHAT OUR INITIAL FULL WORKING MVP WILL WORK LIKE
+================================================================================
+
+User Experience Flow:
+
+1. Application Launch
+   - User opens the application
+   - Application loads saved agents from JSON file
+   - Main window displays with agent list sidebar and empty content area
+
+2. Creating an Agent
+   - User clicks "Create Agent" button
+   - Dialog opens with agent configuration form
+   - User selects agent type (Ollama, Gemini CLI, Claude Code, Generic)
+   - User enters agent name and configuration:
+     - Command (e.g., "ollama", "gemini", "claude")
+     - Arguments (e.g., ["run", "qwen2:7b"])
+     - Environment variables (optional)
+     - Working directory (optional)
+   - User clicks "Create"
+   - Agent appears in sidebar list
+
+3. Executing an Agent
+   - User selects an agent from the sidebar
+   - Agent details panel displays configuration
+   - User enters a prompt in the input field
+   - User clicks "Execute" or presses Enter
+   - Application:
+     a. Spawns CLI process using agent configuration
+     b. Sends prompt to process stdin
+     c. Captures stdout/stderr in real-time
+     d. Displays output in terminal widget
+     e. Updates agent status (Running → Idle)
+   - User sees response in terminal output area
+
+4. Managing Agents
+   - User can edit agent configuration
+   - User can delete agents
+   - User can duplicate agents
+   - All changes are saved to JSON file automatically
+
+5. Multiple Agents
+   - User can create multiple agents
+   - User can switch between agents
+   - Each agent maintains its own configuration
+   - Terminal output is agent-specific
+
+Technical Implementation:
+
+1. Agent Management
+   - Agent struct with id, name, type, status, config
+   - AgentConfig with command, args, env_vars, working_dir
+   - AgentRegistry for persistence (JSON file)
+   - AppState for in-memory state management
+
+2. CLI Process Execution
+   - CliProcessTool implementing AutoAgents ToolRuntime trait
+   - Uses tokio::process::Command for process execution
+   - Captures stdout/stderr asynchronously
+   - Streams output to GUI via channels
+   - Handles process lifecycle (start, stop, cleanup)
+
+3. AutoAgents Integration
+   - CliProcessTool registered with AutoAgents
+   - ReAct agent executor for task execution
+   - Structured output handling (JSON)
+   - Error handling and retry logic
+
+4. UI Components
+   - Sidebar: Agent list with status indicators
+   - Main panel: Agent details and terminal output
+   - Dialogs: Create/edit agent forms
+   - Menu bar: File, Edit, View, Help
+
+5. State Management
+   - AppState: Centralized application state
+   - Agent state: Idle, Running, Stopped, Error
+   - UI state: Selected agent, dialog states
+   - Persistence: JSON file serialization
+
+Example Usage:
+
+1. User creates Ollama agent:
+   - Name: "Ollama Qwen2"
+   - Type: Ollama
+   - Command: "ollama"
+   - Args: ["run", "qwen2:7b"]
+
+2. User creates Gemini agent:
+   - Name: "Gemini Pro"
+   - Type: Gemini CLI
+   - Command: "gemini"
+   - Args: ["pro"]
+
+3. User executes Ollama agent:
+   - Prompt: "What is Rust?"
+   - Application spawns: `ollama run qwen2:7b "What is Rust?"`
+   - Output streams to terminal widget
+   - Response displayed in real-time
+
+4. User switches to Gemini agent:
+   - Selects "Gemini Pro" from sidebar
+   - Terminal output clears (or shows history)
+   - User can execute new prompts
+
+================================================================================
+QUESTIONS WE NEED TO SPEND MORE TIME ON
+================================================================================
+
+1. AutoAgents Tool System
+   Question: How does AutoAgents handle streaming output from tools?
+   Research Needed:
+   - Review ToolRuntime trait implementation
+   - Test if tool output can be streamed in real-time
+   - Verify if executor-level streaming includes tool output
+   - Check if tools can emit progressive updates
+   Status: Needs repository review and testing
+   Impact: High - affects real-time output display
+
+2. WASM Runtime Limitations
+   Question: Can CLI process execution work in WASM runtime?
+   Research Needed:
+   - Test if tokio::process works in WASM
+   - Verify if WASM runtime allows process spawning
+   - Check if native tools can be used instead of WASM tools
+   Status: Needs testing
+   Impact: Medium - affects future browser deployment
+   Solution: Use native Rust tools for CLI execution (not WASM)
+
+3. Streaming Implementation
+   Question: How to stream CLI output to GUI in real-time?
+   Research Needed:
+   - Test tokio::process stdout/stderr streaming
+   - Verify channel-based streaming performance
+   - Check if AutoAgents supports streaming tool output
+   - Test GUI update performance with streaming
+   Status: Needs implementation and testing
+   Impact: High - affects user experience
+
+4. Multi-Agent Orchestration
+   Question: How to orchestrate multiple agents with AutoAgents?
+   Research Needed:
+   - Review AutoAgents multi-agent coordination
+   - Test agent-to-agent communication
+   - Verify workflow execution patterns
+   - Check if AutoAgents supports complex workflows
+   Status: Needs research and testing
+   Impact: High - affects core functionality
+
+5. Error Handling and Recovery
+   Question: How to handle errors in agent execution?
+   Research Needed:
+   - Test error handling in AutoAgents
+   - Verify retry logic and error recovery
+   - Check if AutoAgents supports error callbacks
+   - Test process failure handling
+   Status: Needs implementation and testing
+   Impact: High - affects reliability
+
+6. Process Lifecycle Management
+   Question: How to manage long-running processes?
+   Research Needed:
+   - Test process cleanup on application exit
+   - Verify process group management
+   - Check if command-group library is needed
+   - Test resource cleanup
+   Status: Needs implementation and testing
+   Impact: Medium - affects resource management
+
+7. State Persistence
+   Question: How to persist agent state and execution history?
+   Research Needed:
+   - Design state persistence schema
+   - Test JSON file performance with large state
+   - Consider SQLite for production
+   - Verify state restoration on application start
+   Status: Needs design and implementation
+   Impact: Medium - affects user experience
+
+8. Interactive Input Handling
+   Question: How to handle interactive CLI agents?
+   Research Needed:
+   - Test stdin input to processes
+   - Verify input buffering and validation
+   - Check if AutoAgents supports interactive tools
+   - Test multi-line input handling
+   Status: Needs implementation and testing
+   Impact: Medium - affects CLI agent support
+
+9. Resource Monitoring
+   Question: How to monitor agent resource usage?
+   Research Needed:
+   - Test process monitoring (CPU, memory)
+   - Verify resource limit enforcement
+   - Check if sysinfo library is needed
+   - Test resource throttling
+   Status: Needs research and implementation
+   Impact: Low - future enhancement
+
+10. Web Platform Migration
+    Question: How to migrate to web platform?
+    Research Needed:
+    - Design REST API architecture
+    - Test Axum/Actix Web for backend
+    - Verify React frontend integration
+    - Check if Tauri is needed for desktop version
+    Status: Future consideration
+    Impact: Low - future enhancement
+
+================================================================================
+PATH TO FULL PRODUCTION APP PEOPLE CAN SET UP THEN USE GENERALLY
+================================================================================
+
+Phase 1: MVP Development (Current - 2-3 months)
+  Goal: Working native desktop application with basic agent management
+  Features:
+  - Agent creation and configuration
+  - CLI process execution
+  - Basic orchestration with AutoAgents
+  - Simple UI with terminal output
+  - JSON file persistence
+  Deliverables:
+  - Native desktop application (macOS, Linux, Windows)
+  - Basic documentation
+  - Installation instructions
+  Status: In Progress
+
+Phase 2: Core Features (3-4 months)
+  Goal: Robust agent management with advanced features
+  Features:
+  - Multi-agent orchestration
+  - Agent-to-agent communication
+  - Workflow execution
+  - Advanced error handling
+  - Resource monitoring
+  - State persistence (SQLite)
+  Deliverables:
+  - Enhanced native application
+  - Comprehensive documentation
+  - Example workflows
+  Status: Planned
+
+Phase 3: Web Platform (4-6 months)
+  Goal: Web-accessible platform with REST API
+  Features:
+  - Rust backend API (Axum/Actix Web)
+  - React frontend
+  - WebSocket support for real-time updates
+  - User authentication
+  - Multi-user support
+  - Cloud storage (optional)
+  Deliverables:
+  - Web application
+  - API documentation
+  - Deployment guides
+  Status: Future
+
+Phase 4: Production Ready (6-8 months)
+  Goal: Production-ready application with polish
+  Features:
+  - Plugin system
+  - Advanced workflow builder
+  - Collaboration features
+  - Performance optimization
+  - Security hardening
+  - Comprehensive testing
+  Deliverables:
+  - Production application
+  - Complete documentation
+  - Deployment guides
+  - Community support
+  Status: Future
+
+Phase 5: Enterprise Features (8-12 months)
+  Goal: Enterprise-ready features
+  Features:
+  - Multi-tenant support
+  - Advanced security
+  - Audit logging
+  - Compliance features
+  - Enterprise integrations
+  Deliverables:
+  - Enterprise version
+  - Enterprise documentation
+  - Support services
+  Status: Future
+
+Installation and Setup (Target for Phase 1):
+
+1. Pre-built Binaries
+   - Provide pre-built binaries for macOS, Linux, Windows
+   - Simple download and run
+   - No compilation required
+
+2. Installation Options
+   - Homebrew (macOS): `brew install agent-manager-gui`
+   - Cargo: `cargo install agent-manager-gui`
+   - Direct download from GitHub releases
+
+3. Configuration
+   - First launch creates default configuration
+   - JSON file in user config directory
+   - Simple configuration UI
+
+4. Usage
+   - Launch application
+   - Create agents
+   - Execute tasks
+   - Save and load configurations
+
+Distribution Strategy:
+
+1. GitHub Releases
+   - Pre-built binaries for all platforms
+   - Release notes and changelog
+   - Installation instructions
+
+2. Package Managers
+   - Homebrew (macOS)
+   - Cargo (Rust)
+   - AUR (Arch Linux)
+   - Chocolatey (Windows)
+
+3. Documentation
+   - README with quick start
+   - User guide
+   - API documentation
+   - Example workflows
+
+4. Community
+   - GitHub Issues for bug reports
+   - Discussions for questions
+   - Discord/Slack for community support
+
+================================================================================
+DETAILED DEVELOPMENT PHASES
+================================================================================
+
+================================================================================
+PHASE 1: MVP - HELLO WORLD GUI (COMPLETED)
+================================================================================
+
+✅ Step 1: Install Rust and Cargo
+   - Install rustup
+   - Verify installation
+   - Install Xcode Command Line Tools
+
+✅ Step 2: Create Project Structure
+   - Initialize cargo project
+   - Set up basic project structure
+
+✅ Step 3: Basic GUI Setup
+   - Update Cargo.toml with egui and eframe dependencies
+   - Create hello world GUI window
+   - Verify GUI opens and displays correctly
+
+================================================================================
+PHASE 2: CORE GUI FOUNDATION (COMPLETED)
+================================================================================
+
+✅ Step 4: Basic UI Layout
+   - Create main window with panels (sidebar, main content area)
+   - Implement basic navigation structure
+   - Add menu bar (File, Edit, View, Help)
+
+✅ Step 5: UI Components Library
+   - Button components
+   - Text input fields
+   - List/table views for agents
+   - Status indicators
+   - Terminal output display area
+
+✅ Step 6: State Management
+   - Implement app state structure
+   - Agent registry (list of agents)
+   - Current selected agent state
+   - UI state management
+
+================================================================================
+PHASE 3: AGENT MANAGEMENT CORE (COMPLETED)
+================================================================================
+
+✅ Step 7: Agent Model
+   - Define Agent struct (id, name, type, status, config)
+   - Agent configuration structure
+   - Agent lifecycle states (Idle, Running, Stopped, Error)
+
+✅ Step 8: Agent Registry
+   - In-memory agent storage
+   - Agent CRUD operations (Create, Read, Update, Delete)
+   - Agent persistence (save/load from file)
+
+✅ Step 9: Agent UI Components
+   - Agent list view (sidebar)
+   - Agent details panel
+   - Create new agent dialog
+   - Edit agent configuration
+
+================================================================================
+PHASE 4: CLI INTEGRATION (IN PROGRESS)
+================================================================================
+
+□ Step 10: Process Management
+   - Spawn CLI processes (tokio::process)
+   - Process lifecycle management (start, stop, restart)
+   - Process status monitoring
+
+□ Step 11: Terminal Output Capture
+   - Capture stdout/stderr from CLI processes
+   - Stream output to GUI terminal widget
+   - Buffer management for large outputs
+
+□ Step 12: Input to Processes
+   - Send input to running CLI processes
+   - Handle interactive CLI agents
+   - Command history
+
+□ Step 13: Multiple CLI Support
+   - Support for Gemini CLI
+   - Support for Claude Code
+   - Support for Ollama
+   - Generic CLI agent adapter
+   - CLI detection and configuration
+
+□ Step 14: AutoAgents Integration
+   - Implement CliProcessTool for AutoAgents
+   - Register tool with AutoAgents
+   - Test tool execution
+   - Verify streaming support
+
+================================================================================
+PHASE 5: AGENT ORCHESTRATION
+================================================================================
+
+□ Step 15: AutoAgents Setup
+   - Add AutoAgents dependency
+   - Set up ReAct executor
+   - Configure LLM provider (Ollama)
+   - Test basic agent execution
+
+□ Step 16: Tool Implementation
+   - Implement CliProcessTool
+   - Test tool execution
+   - Verify output capture
+   - Test error handling
+
+□ Step 17: Agent Execution
+   - Integrate AutoAgents with GUI
+   - Execute agents via AutoAgents
+   - Display results in GUI
+   - Handle errors
+
+□ Step 18: Streaming Support
+   - Test streaming output from tools
+   - Verify real-time updates in GUI
+   - Test performance with large outputs
+   - Optimize streaming implementation
+
+================================================================================
+PHASE 6: MULTI-AGENT ORCHESTRATION
+================================================================================
+
+□ Step 19: Multi-Agent Setup
+   - Set up multi-agent coordination
+   - Test agent-to-agent communication
+   - Verify pub/sub messaging
+   - Test agent collaboration
+
+□ Step 20: Workflow Execution
+   - Define workflow structure
+   - Implement workflow executor
+   - Test workflow execution
+   - Verify error handling
+
+□ Step 21: Task Planning
+   - Implement task decomposition
+   - Test planning with LLM
+   - Verify task execution
+   - Test error recovery
+
+□ Step 22: Agent Coordination
+   - Implement agent coordination logic
+   - Test agent collaboration
+   - Verify result aggregation
+   - Test error propagation
+
+================================================================================
+PHASE 7: ADVANCED FEATURES
+================================================================================
+
+□ Step 23: Resource Monitoring
+   - Monitor CPU/memory usage per agent
+   - Implement resource limits
+   - Test resource throttling
+   - Verify process isolation
+
+□ Step 24: Logging & Monitoring
+   - Centralized logging system
+   - Log aggregation from all agents
+   - Log search and filtering
+   - Real-time log streaming
+
+□ Step 25: Configuration Management
+   - Agent configuration presets
+   - Export/import configurations
+   - Configuration validation
+   - Configuration templates
+
+□ Step 26: Persistence Enhancement
+   - Migrate to SQLite database
+   - Implement state persistence
+   - Restore sessions
+   - Project-based agent management
+
+================================================================================
+PHASE 8: POLISH & UX
+================================================================================
+
+□ Step 27: Error Handling
+   - User-friendly error messages
+   - Error recovery
+   - Error logging
+   - Error reporting
+
+□ Step 28: Keyboard Shortcuts
+   - Common actions shortcuts
+   - Customizable shortcuts
+   - Shortcut help dialog
+   - Keyboard navigation
+
+□ Step 29: Themes & Customization
+   - Dark/light themes
+   - UI customization options
+   - User preferences
+   - Theme persistence
+
+□ Step 30: Documentation
+   - In-app help
+   - Tooltips and hints
+   - User guide
+   - API documentation
+
+================================================================================
+FUTURE ENHANCEMENTS (POST-MVP)
+================================================================================
+
+□ Plugin System
+   - Extensible agent types
+   - Custom agent plugins
+   - Plugin marketplace
+   - Plugin API
+
+□ Cloud Integration
+   - Remote agent execution
+   - Agent sharing
+   - Cloud-backed storage
+   - Sync across devices
+
+□ Collaboration Features
+   - Multi-user support
+   - Agent sharing
+   - Team workflows
+   - Real-time collaboration
+
+□ AI-Powered Features
+   - Agent recommendations
+   - Auto-configuration
+   - Intelligent orchestration
+   - Workflow optimization
+
+□ Web Platform
+   - React frontend
+   - Rust backend API
+   - WebSocket support
+   - User authentication
+
+================================================================================
+DEVELOPMENT WORKFLOW
+================================================================================
+
+1. Fast Iteration Setup:
+   - Use `cargo watch -x 'run'` for auto-rebuild on save
+   - Test GUI changes immediately
+   - Iterate quickly on UI components
+
+2. Testing Strategy:
+   - Unit tests for agent management logic
+   - Integration tests for CLI integration
+   - Integration tests for AutoAgents
+   - Manual testing for GUI components
+
+3. Code Organization:
+   - src/
+     - main.rs (GUI app entry point)
+     - state/ (state management)
+       - app_state.rs (AppState, Agent)
+       - config.rs (AgentConfig, AgentType)
+       - persistence.rs (AgentRegistry)
+     - ui/ (UI components)
+       - layout.rs (main layout)
+       - components.rs (reusable components)
+       - dialogs.rs (create/edit dialogs)
+     - orchestration/ (AutoAgents integration)
+       - tools.rs (CLI process tools)
+       - agents.rs (agent execution)
+       - workflow.rs (workflow execution)
+     - cli/ (CLI integration)
+       - process.rs (process management)
+       - stream.rs (output streaming)
+     - utils/ (utility functions)
+
+4. Version Control:
+   - Commit after each phase completion
+   - Feature branches for major features
+   - Keep main branch stable
+   - Tag releases
+
+================================================================================
+KEY MILESTONES
+================================================================================
+
+Milestone 1: Basic GUI (Phase 1-2) ✅ COMPLETED
+  - Hello world GUI works
+  - Basic UI layout established
+  - Can navigate between views
+
+Milestone 2: Agent Management (Phase 3) ✅ COMPLETED
+  - Can create/edit/delete agents
+  - Agent list displays correctly
+  - Agent state persists
+
+Milestone 3: CLI Integration (Phase 4) ⏳ IN PROGRESS
+  - Can spawn CLI processes
+  - Terminal output displays
+  - Can send input to processes
+  - AutoAgents integration
+
+Milestone 4: Agent Orchestration (Phase 5) □ PLANNED
+  - Can execute agents via AutoAgents
+  - Streaming output works
+  - Error handling works
+  - Basic orchestration functional
+
+Milestone 5: Multi-Agent (Phase 6) □ PLANNED
+  - Can orchestrate multiple agents
+  - Agent collaboration works
+  - Workflow execution functional
+  - Task planning works
+
+Milestone 6: Production Ready (Phase 7-8) □ PLANNED
+  - All core features working
+  - Polished UX
+  - Error handling complete
+  - Documentation in place
+
+================================================================================
+CURRENT STATUS
+================================================================================
+
+Phase: 4 - CLI Integration
+Current Step: 10 - Process Management
+Next: Implement CLI process execution with tokio::process and AutoAgents integration
+
+Recent Progress:
+- ✅ Completed Phase 1-3 (GUI foundation and agent management)
+- ✅ Implemented agent persistence
+- ✅ Created agent dialogs (create/edit)
+- ⏳ Working on CLI process execution
+- ⏳ Researching AutoAgents integration
+
+Next Steps:
+1. Implement CliProcessTool for AutoAgents
+2. Test CLI process execution
+3. Integrate with AutoAgents
+4. Test streaming output
+5. Verify error handling
+
+================================================================================

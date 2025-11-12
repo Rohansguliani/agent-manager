@@ -1,0 +1,56 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./backend:/app
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-git-cache:/usr/local/cargo/git
+      - cargo-build-cache:/app/target
+    environment:
+      - RUST_LOG=debug
+      - RUST_BACKTRACE=1
+      - PORT=8080
+      - HOST=0.0.0.0
+      # GEMINI_API_KEY is automatically loaded from .env file in this directory
+      # Docker Compose automatically reads .env files from the same directory
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    networks:
+      - app-network
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8080
+    networks:
+      - app-network
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  cargo-cache:
+  cargo-git-cache:
+  cargo-build-cache:
+
+networks:
+  app-network:
+    driver: bridge
+
