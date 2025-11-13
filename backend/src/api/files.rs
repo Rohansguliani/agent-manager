@@ -42,8 +42,16 @@ pub async fn list_files(
     State(_state): State<Arc<RwLock<AppState>>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<ListFilesResponse>, AppError> {
-    // Get path from query params, default to current directory
-    let default_path = ".".to_string();
+    // Get path from query params, default to home directory
+    // In Docker, home is mounted at /host/home
+    let default_path = if std::path::Path::new("/host/home").exists() {
+        "/host/home".to_string()
+    } else {
+        // Fallback to current user's home directory if not in Docker
+        std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE")) // Windows fallback
+            .unwrap_or_else(|_| ".".to_string())
+    };
     let path_str = params.get("path").unwrap_or(&default_path);
 
     // Use service layer to list directory

@@ -10,6 +10,8 @@ services:
       - cargo-cache:/usr/local/cargo/registry
       - cargo-git-cache:/usr/local/cargo/git
       - cargo-build-cache:/app/target
+      # Mount user's home directory so backend can access Mac laptop files (read-write)
+      - ${HOME}:/host/home
     environment:
       - RUST_LOG=debug
       - RUST_BACKTRACE=1

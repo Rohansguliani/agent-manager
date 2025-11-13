@@ -4,8 +4,10 @@
 
 use crate::error::AppError;
 use serde::Serialize;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use tracing::warn;
 
 /// File or directory information
 #[derive(Debug, Serialize, Clone)]
@@ -95,13 +97,42 @@ impl FileService {
             ))
         })? {
             let entry_path = entry.path();
-            let metadata = entry.metadata().await.map_err(|e| {
-                AppError::PermissionDenied(format!(
-                    "Failed to read metadata: {} - {}",
-                    entry_path.display(),
-                    e
-                ))
-            })?;
+
+            // Try to read metadata, but skip entries that can't be read
+            // This handles symlinks, deleted files, and permission issues gracefully
+            let metadata = match entry.metadata().await {
+                Ok(meta) => meta,
+                Err(e) => {
+                    // Check the error kind
+                    match e.kind() {
+                        // File doesn't exist (e.g., broken symlink, deleted file)
+                        ErrorKind::NotFound => {
+                            warn!(
+                                path = %entry_path.display(),
+                                "Skipping entry that no longer exists (possibly a broken symlink)"
+                            );
+                            continue;
+                        }
+                        // Permission denied - log but continue (don't fail entire operation)
+                        ErrorKind::PermissionDenied => {
+                            warn!(
+                                path = %entry_path.display(),
+                                "Skipping entry due to permission denied"
+                            );
+                            continue;
+                        }
+                        // Other errors - log and skip
+                        _ => {
+                            warn!(
+                                path = %entry_path.display(),
+                                error = %e,
+                                "Skipping entry due to error reading metadata"
+                            );
+                            continue;
+                        }
+                    }
+                }
+            };
 
             let name = entry_path
                 .file_name()

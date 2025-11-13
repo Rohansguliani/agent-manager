@@ -148,7 +148,8 @@ export const api = {
 
   // File system API
   async listFiles(path?: string): Promise<{ files: FileInfo[]; path: string }> {
-    const url = path 
+    // If path is empty string, don't include it in URL (backend will use default)
+    const url = path && path !== ''
       ? `${API_URL}/api/files?path=${encodeURIComponent(path)}`
       : `${API_URL}/api/files`;
     const response = await fetch(url);

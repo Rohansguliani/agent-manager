@@ -7,7 +7,8 @@ interface FileManagerProps {
 
 export function FileManager({ onWorkingDirectoryChange }: FileManagerProps) {
   const [files, setFiles] = useState<FileInfo[]>([])
-  const [currentPath, setCurrentPath] = useState<string>('.')
+  // Default to empty string, which will trigger the backend to use its default (home directory)
+  const [currentPath, setCurrentPath] = useState<string>('')
   const [workingDirectory, setWorkingDirectory] = useState<string | null>(null)
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
@@ -42,8 +43,14 @@ export function FileManager({ onWorkingDirectoryChange }: FileManagerProps) {
   }, [loadWorkingDirectory])
 
   // Load files when path changes
+  // If currentPath is empty, the backend will use its default (home directory)
   useEffect(() => {
-    loadFiles(currentPath)
+    if (currentPath === '') {
+      // Load with no path parameter, backend will default to home
+      loadFiles('')
+    } else {
+      loadFiles(currentPath)
+    }
   }, [currentPath, loadFiles])
 
   const handleFolderClick = (file: FileInfo) => {

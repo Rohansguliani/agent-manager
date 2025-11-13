@@ -86,67 +86,111 @@ impl StreamingCliExecutor {
             .take()
             .ok_or_else(|| ExecutionError::ProcessFailed("Failed to capture stdout".to_string()))?;
 
-        // Read stdout line by line
-        let reader = BufReader::new(stdout);
-        let mut lines = reader.lines();
+        // Get stderr handle for error logging
+        let stderr = child.stderr.take();
 
-        // Spawn a task to read lines and send them through the channel
+        // Clone agent_id for logging
         let agent_id = agent.id.clone();
-        let tx_clone = tx.clone();
+
+        // Spawn a task to read stdout line by line and send through the channel
+        // The task owns the sender and will drop it when reading is complete
+        // This ensures the channel stays open until all data is read
+        let agent_id_clone = agent_id.clone();
         tokio::spawn(async move {
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+            let mut line_count = 0;
+
             while let Ok(Some(line)) = lines.next_line().await {
-                if tx_clone.send(line).await.is_err() {
+                line_count += 1;
+                if tx.send(line).await.is_err() {
                     // Receiver dropped, stop reading
+                    debug!(
+                        agent_id = %agent_id_clone,
+                        "Receiver dropped, stopping stdout read"
+                    );
                     break;
+                }
+            }
+            debug!(
+                agent_id = %agent_id_clone,
+                lines_read = line_count,
+                "Finished reading stdout"
+            );
+            // Sender is dropped here when the task completes, closing the channel
+        });
+
+        // Spawn a task to read stderr and log errors (if any)
+        if let Some(stderr) = stderr {
+            let agent_id_stderr = agent_id.clone();
+            tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                let mut lines = reader.lines();
+
+                while let Ok(Some(line)) = lines.next_line().await {
+                    error!(
+                        agent_id = %agent_id_stderr,
+                        stderr_line = %line,
+                        "Process stderr output"
+                    );
+                }
+            });
+        }
+
+        // Spawn a task to wait for process completion and handle timeout
+        // The child process is moved into this task so we can kill it on timeout
+        // This runs in the background and doesn't block the return
+        let agent_id_wait = agent_id.clone();
+        let timeout_duration = self.default_timeout;
+        tokio::spawn(async move {
+            match timeout(timeout_duration, child.wait()).await {
+                Ok(Ok(status)) => {
+                    if status.success() {
+                        info!(
+                            agent_id = %agent_id_wait,
+                            "Process completed successfully"
+                        );
+                    } else {
+                        let exit_code = status.code().unwrap_or(-1);
+                        error!(
+                            agent_id = %agent_id_wait,
+                            exit_code = exit_code,
+                            "Process exited with error code"
+                        );
+                    }
+                }
+                Ok(Err(e)) => {
+                    error!(
+                        agent_id = %agent_id_wait,
+                        error = %e,
+                        "Error waiting for process"
+                    );
+                }
+                Err(_) => {
+                    error!(
+                        agent_id = %agent_id_wait,
+                        timeout_secs = timeout_duration.as_secs(),
+                        "Process execution timed out, killing process"
+                    );
+                    // Try to kill the process (child is moved into this closure)
+                    if let Err(e) = child.kill().await {
+                        error!(
+                            agent_id = %agent_id_wait,
+                            error = %e,
+                            "Failed to kill timed-out process"
+                        );
+                    }
                 }
             }
         });
 
-        // Wait for process to complete with overall timeout
-        let status_result = timeout(self.default_timeout, child.wait()).await;
-
-        // Close the sender to signal end of stream
-        drop(tx);
-
-        match status_result {
-            Ok(Ok(status)) => {
-                if status.success() {
-                    info!(
-                        agent_id = %agent_id,
-                        "Query executed successfully with streaming"
-                    );
-                    Ok(rx)
-                } else {
-                    let exit_code = status.code().unwrap_or(-1);
-                    error!(
-                        agent_id = %agent_id,
-                        exit_code = exit_code,
-                        "Process execution failed"
-                    );
-                    Err(ExecutionError::ProcessFailed(format!(
-                        "Process exited with code {}",
-                        exit_code
-                    )))
-                }
-            }
-            Ok(Err(e)) => {
-                error!(
-                    agent_id = %agent_id,
-                    error = %e,
-                    "Error waiting for process"
-                );
-                Err(ExecutionError::SpawnFailed(e))
-            }
-            Err(_) => {
-                error!(
-                    agent_id = %agent_id,
-                    timeout_secs = self.default_timeout.as_secs(),
-                    "Process execution timed out"
-                );
-                // Kill the process
-                let _ = child.kill().await;
-                Err(ExecutionError::Timeout(self.default_timeout.as_secs()))
-            }
-        }
+        // Return receiver immediately so caller can start reading
+        // The reading task will complete when stdout is closed (process exits)
+        // The sender will be dropped when the reading task completes, closing the channel
+        info!(
+            agent_id = %agent_id,
+            "Started streaming process, returning receiver"
+        );
+        Ok(rx)
     }
 }
