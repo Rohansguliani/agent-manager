@@ -100,17 +100,20 @@ async fn main() -> anyhow::Result<()> {
         .route("/", get(hello_world))
         .route("/api/health", get(health_check))
         // Agent management API
-        .route("/api/agents", get(api::list_agents).post(api::create_agent))
+        .route(
+            "/api/agents",
+            get(api::agents::list_agents).post(api::agents::create_agent),
+        )
         .route(
             "/api/agents/:id",
-            get(api::get_agent)
-                .put(api::update_agent)
-                .delete(api::delete_agent),
+            get(api::agents::get_agent)
+                .put(api::agents::update_agent)
+                .delete(api::agents::delete_agent),
         )
-        .route("/api/agents/:id/start", post(api::start_agent))
-        .route("/api/agents/:id/stop", post(api::stop_agent))
-        .route("/api/agents/:id/query", post(api::query_agent))
-        .route("/api/query/stream", post(api::query_stream))
+        .route("/api/agents/:id/start", post(api::agents::start_agent))
+        .route("/api/agents/:id/stop", post(api::agents::stop_agent))
+        .route("/api/agents/:id/query", post(api::queries::query_agent))
+        .route("/api/query/stream", post(api::queries::query_stream))
         // File system API
         .route("/api/files", get(api::list_files))
         .route(

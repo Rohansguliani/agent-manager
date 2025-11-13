@@ -2,8 +2,11 @@
 //!
 //! Contains HTTP request handlers for agent management endpoints
 
+pub mod agents;
 pub mod files;
-pub mod handlers;
+pub mod queries;
+pub mod streaming;
+pub mod utils;
 
+// Re-export file API for convenience (used by main.rs)
 pub use files::*;
-pub use handlers::*;

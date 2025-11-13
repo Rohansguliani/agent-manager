@@ -6,7 +6,7 @@ use crate::executor::error::ExecutionError;
 use crate::state::Agent;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{debug, error, info};
@@ -74,6 +74,7 @@ impl StreamingCliExecutor {
         debug!(
             command = %agent.config.command,
             args = ?agent.config.args,
+            working_dir = ?agent.config.working_dir,
             "Spawning process for streaming"
         );
 
@@ -92,26 +93,62 @@ impl StreamingCliExecutor {
         // Clone agent_id for logging
         let agent_id = agent.id.clone();
 
-        // Spawn a task to read stdout line by line and send through the channel
-        // The task owns the sender and will drop it when reading is complete
-        // This ensures the channel stays open until all data is read
+        // Spawn a task to read stdout and stream lines through the channel
+        // Read all bytes first to ensure we capture everything even if process completes quickly
+        // This approach ensures we don't miss output due to timing issues
         let agent_id_clone = agent_id.clone();
         tokio::spawn(async move {
-            let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
+            let mut reader = BufReader::new(stdout);
+            let mut buffer = Vec::new();
             let mut line_count = 0;
 
-            while let Ok(Some(line)) = lines.next_line().await {
-                line_count += 1;
-                if tx.send(line).await.is_err() {
-                    // Receiver dropped, stop reading
+            // Read all bytes from stdout until EOF
+            // This ensures we capture all output even if the process completes quickly
+            match reader.read_to_end(&mut buffer).await {
+                Ok(_) => {
+                    // Convert bytes to string and process lines
+                    match String::from_utf8(buffer) {
+                        Ok(output) => {
+                            if !output.is_empty() {
+                                // Split into lines and send each line through the channel
+                                for line in output.lines() {
+                                    line_count += 1;
+                                    if tx.send(line.to_string()).await.is_err() {
+                                        // Receiver dropped, stop reading
+                                        debug!(
+                                            agent_id = %agent_id_clone,
+                                            "Receiver dropped, stopping stdout read"
+                                        );
+                                        break;
+                                    }
+                                }
+                            } else {
+                                debug!(
+                                    agent_id = %agent_id_clone,
+                                    "stdout is empty"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            // UTF-8 conversion error
+                            debug!(
+                                agent_id = %agent_id_clone,
+                                error = %e,
+                                "Failed to convert stdout to UTF-8"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Error reading stdout
                     debug!(
                         agent_id = %agent_id_clone,
-                        "Receiver dropped, stopping stdout read"
+                        error = %e,
+                        "Error reading stdout"
                     );
-                    break;
                 }
             }
+
             debug!(
                 agent_id = %agent_id_clone,
                 lines_read = line_count,

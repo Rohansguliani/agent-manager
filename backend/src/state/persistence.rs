@@ -1,34 +1,24 @@
-// Agent persistence module
-// Handles saving and loading agent configurations to/from files
+//! Agent persistence module
+//!
+//! Handles saving and loading agent configurations to/from files
 
 use super::app_state::{Agent, AgentId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use thiserror::Error;
 
 /// Error types for persistence operations
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum PersistenceError {
-    /// File I/O error
+    #[error("IO Error: {0}")]
     IoError(String),
-    /// JSON serialization/deserialization error
+    #[error("JSON Error: {0}")]
     JsonError(String),
-    /// Invalid data format
+    #[error("Invalid Data: {0}")]
     InvalidData(String),
 }
-
-impl std::fmt::Display for PersistenceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PersistenceError::IoError(msg) => write!(f, "IO Error: {}", msg),
-            PersistenceError::JsonError(msg) => write!(f, "JSON Error: {}", msg),
-            PersistenceError::InvalidData(msg) => write!(f, "Invalid Data: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for PersistenceError {}
 
 /// Serializable structure for agent registry
 /// Used for saving/loading agents to/from JSON files

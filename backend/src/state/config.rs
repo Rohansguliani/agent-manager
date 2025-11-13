@@ -1,5 +1,10 @@
-// Agent configuration module
-// Defines the structure and types for agent configurations
+//! Agent configuration module
+//!
+//! Defines the structure and types for agent configurations.
+//!
+//! This module handles agent-level configuration (agent types, agent configs).
+//! For application-level configuration (server settings, persistence settings,
+//! execution settings), see `config`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

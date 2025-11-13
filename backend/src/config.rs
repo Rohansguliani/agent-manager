@@ -2,6 +2,10 @@
 //!
 //! Centralized configuration management with environment variable support
 //! and sensible defaults.
+//!
+//! This module handles application-level configuration (server settings,
+//! persistence settings, execution settings). For agent-level configuration
+//! (agent types, agent configs), see `state::config`.
 
 use std::env;
 
