@@ -3,6 +3,7 @@
 //! Provides file system operations with proper error handling and validation.
 
 use crate::error::AppError;
+use anyhow::anyhow;
 use serde::Serialize;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -171,6 +172,74 @@ impl FileService {
 
         Ok((files, absolute_path))
     }
+
+    /// Write content to a file
+    ///
+    /// # Arguments
+    /// * `file_path` - Path to the file (can be relative or absolute)
+    /// * `content` - Content to write to the file
+    /// * `working_dir` - Optional working directory context (for relative paths)
+    ///
+    /// # Returns
+    /// * `Ok(PathBuf)` - Canonicalized absolute path of the created file
+    /// * `Err(AppError)` - If file cannot be created or written
+    pub async fn write_file(
+        file_path: &str,
+        content: &str,
+        working_dir: Option<&str>,
+    ) -> Result<PathBuf, AppError> {
+        let path = Path::new(file_path);
+
+        // If path is relative and working_dir is provided, resolve relative to working_dir
+        let absolute_path = if path.is_relative() {
+            if let Some(work_dir) = working_dir {
+                tracing::debug!(
+                    working_dir_input = %work_dir,
+                    relative_path = %file_path,
+                    "FileService::write_file: Resolving relative path with working directory"
+                );
+                let work_dir_path = Self::validate_directory_path(work_dir)?;
+                let resolved = work_dir_path.join(path);
+                tracing::debug!(
+                    resolved_path = %resolved.display(),
+                    "FileService::write_file: Resolved absolute path"
+                );
+                resolved
+            } else {
+                // Use current directory
+                std::env::current_dir()
+                    .map_err(|e| {
+                        AppError::Internal(anyhow!("Failed to get current directory: {}", e))
+                    })?
+                    .join(path)
+            }
+        } else {
+            path.to_path_buf()
+        };
+
+        // Create parent directories if they don't exist
+        if let Some(parent) = absolute_path.parent() {
+            fs::create_dir_all(parent).await.map_err(|e| {
+                AppError::Internal(anyhow!(
+                    "Failed to create parent directories for {}: {}",
+                    file_path,
+                    e
+                ))
+            })?;
+        }
+
+        // Write the file
+        fs::write(&absolute_path, content).await.map_err(|e| {
+            AppError::Internal(anyhow!("Failed to write file {}: {}", file_path, e))
+        })?;
+
+        // Canonicalize the path
+        let canonical = absolute_path
+            .canonicalize()
+            .map_err(|e| AppError::InvalidPath(format!("Failed to canonicalize path: {}", e)))?;
+
+        Ok(canonical)
+    }
 }
 
 #[cfg(test)]
@@ -264,5 +333,44 @@ mod tests {
                 panic!("Expected FileNotFound error, got: {:?}", other);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_write_file_simple() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test.txt");
+        let content = "Hello, world!";
+
+        let result = FileService::write_file(file_path.to_str().unwrap(), content, None).await;
+
+        assert!(result.is_ok());
+        let canonical = result.unwrap();
+        assert!(canonical.exists());
+        assert!(canonical.is_file());
+
+        // Verify content
+        let written_content = std::fs::read_to_string(&canonical).expect("Failed to read file");
+        assert_eq!(written_content, content);
+    }
+
+    #[tokio::test]
+    async fn test_write_file_with_working_dir() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let work_dir = temp_dir.path().to_str().unwrap();
+        let file_path = "subdir/test.txt";
+        let content = "Test content";
+
+        let result = FileService::write_file(file_path, content, Some(work_dir)).await;
+
+        assert!(result.is_ok());
+        let canonical = result.unwrap();
+        assert!(canonical.exists());
+        assert!(canonical.is_file());
+        assert!(canonical.parent().unwrap().exists());
+        assert_eq!(canonical.parent().unwrap().file_name().unwrap(), "subdir");
+
+        // Verify content
+        let written_content = std::fs::read_to_string(&canonical).expect("Failed to read file");
+        assert_eq!(written_content, content);
     }
 }

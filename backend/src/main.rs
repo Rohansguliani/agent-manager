@@ -7,6 +7,7 @@ mod api;
 mod config;
 mod error;
 mod executor;
+mod orchestrator;
 mod services;
 mod state;
 mod websocket;
@@ -119,6 +120,11 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/files/working-directory",
             get(api::get_working_directory).post(api::set_working_directory),
+        )
+        // Orchestration API
+        .route(
+            "/api/orchestrate/poem",
+            post(api::orchestrator::orchestrate_poem),
         )
         // WebSocket for real-time updates
         .route("/ws", get(websocket::websocket_handler))

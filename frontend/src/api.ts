@@ -171,6 +171,26 @@ export const api = {
     });
     return handleResponse<WorkingDirectoryResponse>(response);
   },
+
+  // Orchestration API - uses SSE like query_stream
+  async orchestratePoem(goal: string = ''): Promise<Response> {
+    const response = await fetch(`${API_URL}/api/orchestrate/poem`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ goal }),
+    });
+
+    if (!response.ok) {
+      throw new ApiError(
+        `HTTP ${response.status}: ${response.statusText}`,
+        response.status
+      );
+    }
+
+    return response;
+  },
 };
 
 // File system types
@@ -189,6 +209,17 @@ export interface ListFilesResponse {
 
 export interface WorkingDirectoryResponse {
   path: string | null;
+}
+
+// Orchestration API types
+export interface OrchestrationRequest {
+  goal: string;
+}
+
+export interface OrchestrationStatus {
+  step: number;
+  message: string;
+  status: string;
 }
 
 // WebSocket message type
