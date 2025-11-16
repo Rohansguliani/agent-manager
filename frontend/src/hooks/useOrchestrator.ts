@@ -9,10 +9,10 @@ import { useState, useCallback } from 'react'
 import { api, OrchestrationStatus } from '../api'
 
 interface UseOrchestratorReturn {
-  status: OrchestrationStatus | null
+  stepStatuses: Record<string, OrchestrationStatus> // Map of step_id -> status for parallel tracking
   running: boolean
   error: string | null
-  runOrchestration: (goal?: string) => Promise<void>
+  runOrchestration: (goal: string, useDynamic?: boolean) => Promise<void>
   clearStatus: () => void
 }
 
@@ -22,22 +22,25 @@ interface UseOrchestratorReturn {
  * @returns Object with status state and runOrchestration function
  */
 export function useOrchestrator(): UseOrchestratorReturn {
-  const [status, setStatus] = useState<OrchestrationStatus | null>(null)
+  // Use Record (object) instead of array to support parallel execution tracking
+  const [stepStatuses, setStepStatuses] = useState<Record<string, OrchestrationStatus>>({})
   const [running, setRunning] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
 
   const clearStatus = useCallback(() => {
-    setStatus(null)
+    setStepStatuses({})
     setError(null)
   }, [])
 
-  const runOrchestration = useCallback(async (goal: string = '') => {
+  const runOrchestration = useCallback(async (goal: string, useDynamic: boolean = false) => {
     setRunning(true)
     setError(null)
-    setStatus(null)
+    setStepStatuses({})
 
     try {
-      const fetchResponse = await api.orchestratePoem(goal)
+      const fetchResponse = useDynamic
+        ? await api.orchestrate(goal)
+        : await api.orchestratePoem(goal)
 
       if (!fetchResponse.ok) {
         throw new Error(`HTTP error! status: ${fetchResponse.status}`)
@@ -77,7 +80,20 @@ export function useOrchestrator(): UseOrchestratorReturn {
                   } else {
                     try {
                       const statusUpdate: OrchestrationStatus = JSON.parse(data)
-                      setStatus(statusUpdate)
+                      // Update status by step_id (supports parallel execution)
+                      // If step_id is missing, generate a unique one
+                      const stepId = statusUpdate.step_id || `step_${statusUpdate.step || 'unknown'}`
+                      const statusWithId: OrchestrationStatus = {
+                        ...statusUpdate,
+                        step_id: stepId,
+                      }
+                      
+                      // Update status map (upsert by step_id)
+                      setStepStatuses((prev) => ({
+                        ...prev,
+                        [stepId]: statusWithId,
+                      }))
+                      
                       if (statusUpdate.status === 'completed' || statusUpdate.status === 'error') {
                         setRunning(false)
                         if (statusUpdate.status === 'error') {
@@ -105,7 +121,7 @@ export function useOrchestrator(): UseOrchestratorReturn {
   }, [])
 
   return {
-    status,
+    stepStatuses,
     running,
     error,
     runOrchestration,

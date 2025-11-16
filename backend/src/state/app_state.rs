@@ -376,10 +376,7 @@ mod tests {
         state.add_agent(agent);
 
         assert!(state.update_agent_status(&"1".to_string(), AgentStatus::Running));
-        assert_eq!(
-            state.agents.get(&"1".to_string()).unwrap().status,
-            AgentStatus::Running
-        );
+        assert_eq!(state.agents.get("1").unwrap().status, AgentStatus::Running);
 
         assert!(!state.update_agent_status(&"999".to_string(), AgentStatus::Running));
     }

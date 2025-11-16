@@ -112,9 +112,7 @@ pub async fn query_stream(
     let executor = StreamingCliExecutor::new(30);
 
     // Create SSE stream
-    let stream = create_sse_stream(executor, agent, request.query, state);
-
-    Ok(stream)
+    create_sse_stream(executor, agent, request.query, state)
 }
 
 #[cfg(test)]

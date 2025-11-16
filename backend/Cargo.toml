@@ -24,9 +24,14 @@ anyhow = "1.0"
 tokio-stream = "0.1"
 futures-util = { version = "0.3", features = ["sink"] }
 async-stream = "0.3"
+reqwest = { version = "0.11", features = ["json"] }
+async-trait = "0.1"
+graph-flow = { path = "../../rs-graph-llm/graph-flow" }  # GraphFlow-rs for parallel DAG execution (Phase 4F)
 
 [dev-dependencies]
 tempfile = "3.0"
+mockito = "1.2"
+serial_test = "3.0"
 
 [[bin]]
 name = "test_gemini"

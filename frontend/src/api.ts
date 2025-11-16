@@ -191,6 +191,26 @@ export const api = {
 
     return response;
   },
+
+  // Dynamic Orchestration API - uses planner agent and executes plan
+  async orchestrate(goal: string): Promise<Response> {
+    const response = await fetch(`${API_URL}/api/orchestrate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ goal }),
+    });
+
+    if (!response.ok) {
+      throw new ApiError(
+        `HTTP ${response.status}: ${response.statusText}`,
+        response.status
+      );
+    }
+
+    return response;
+  },
 };
 
 // File system types
@@ -217,9 +237,10 @@ export interface OrchestrationRequest {
 }
 
 export interface OrchestrationStatus {
-  step: number;
+  step?: number; // Optional for backward compatibility
+  step_id: string; // Required for parallel tracking
   message: string;
-  status: string;
+  status: 'running' | 'completed' | 'error' | 'pending'; // Added 'pending' for steps waiting on dependencies
 }
 
 // WebSocket message type

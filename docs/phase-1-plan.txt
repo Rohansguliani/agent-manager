@@ -1,0 +1,139 @@
+# Phase 1 Step-by-Step Plan: Gemini API Primitive Implementation
+
+## Phase 1A: API Primitive Foundation
+
+### Step 1: Add Dependencies
+**File**: `backend/Cargo.toml`
+**Action**: Add `reqwest` dependency
+**Code**:
+```toml
+reqwest = { version = "0.11", features = ["json"] }
+```
+
+### Step 2: Create Gemini API Types Module
+**File**: `backend/src/orchestrator/gemini_types.rs` (NEW FILE)
+**Purpose**: Define serde structs that mirror the Gemini API JSON response
+**Action**: Create all structs for nested JSON
+
+### Step 3: Create Gemini API Client Module
+**File**: `backend/src/orchestrator/api_client.rs` (NEW FILE)
+**Purpose**: HTTP client wrapper for Gemini API calls
+**Action**: Implement `call_gemini_api` function skeleton
+
+### Step 4: Implement API Call Logic
+**File**: `backend/src/orchestrator/api_client.rs`
+**Action**: Fill in the `call_gemini_api` function with actual implementation
+
+Implementation steps:
+1. Build request URL: `{GEMINI_API_BASE_URL}/models/{model}:generateContent?key={api_key}`
+2. Create `GeminiApiRequest` with prompt
+3. If `force_json`, set `response_mime_type: "application/json"`
+4. Send POST request using `reqwest::Client`
+5. Check HTTP status code (handle 429, 500, etc.)
+6. Parse JSON response into `GeminiApiResponse`
+7. Extract text from `candidates[0].content.parts[0].text`
+8. Handle edge cases (missing candidates, blocked prompts, etc.)
+
+### Step 5: Add API Client to Orchestrator Module
+**File**: `backend/src/orchestrator/mod.rs`
+**Action**: Add the new modules
+**Code**:
+```rust
+pub mod primitives;
+pub mod gemini_types;
+pub mod api_client;
+```
+
+### Step 6: Create New API Primitive
+**File**: `backend/src/orchestrator/primitives.rs`
+**Action**: Add `internal_run_gemini_api` function
+**Purpose**: Wrapper around `api_client::call_gemini_api` that reads API key from env
+**Function signature**:
+```rust
+/// Run Gemini API directly with structured JSON support
+///
+/// This is a wrapper around the direct Gemini API client.
+/// Used for "Planner" calls that need reliable JSON output.
+///
+/// # Arguments
+/// * `prompt` - The prompt to send
+/// * `force_json` - If true, request JSON response format (for planner)
+///
+/// # Returns
+/// * `Ok(String)` - The response text
+/// * `Err(AppError)` - If API call failed or API key missing
+pub async fn internal_run_gemini_api(
+    prompt: &str,
+    force_json: bool,
+) -> Result<String, AppError> {
+    // Read API key from environment
+    // Call api_client::call_gemini_api
+    // Return result
+}
+```
+
+---
+
+## Phase 1B: Response Parsing & Error Handling
+
+### Step 7: Implement Response Parsing with Error Handling
+**File**: `backend/src/orchestrator/api_client.rs`
+**Action**: Replace `todo!()` with full implementation that handles:
+- Missing API key
+- HTTP errors (429, 500, etc.)
+- Empty candidates array
+- Blocked prompts (`prompt_feedback.block_reason`)
+- Missing text in response
+- JSON parsing errors (include response body in error message)
+
+### Step 8: Add Tests for API Client
+**File**: `backend/src/orchestrator/api_client.rs`
+**Action**: Add `#[cfg(test)]` module with tests:
+- Mock HTTP responses (using `reqwest-mock` or similar)
+- Test successful response parsing
+- Test error cases (missing candidates, blocked prompts, etc.)
+- Test JSON mode (when `force_json=true`)
+
+### Step 9: Add Tests for New Primitive
+**File**: `backend/src/orchestrator/primitives.rs`
+**Action**: Add tests for `internal_run_gemini_api`:
+- Test with valid API key (may require real API key in test env)
+- Test with missing API key (should return error)
+- Test JSON mode flag
+
+### Step 10: Integration Test
+**Action**: Manual testing
+**Steps**:
+1. Set `GEMINI_API_KEY` in your `.env` file
+2. Create a small test binary or add to existing `test_gemini.rs`
+3. Call `internal_run_gemini_api` with a simple prompt
+4. Verify response is returned correctly
+5. Test with `force_json=true` and verify JSON response
+
+---
+
+## Phase 1 Checklist
+
+- [ ] Step 1: Added `reqwest` dependency
+- [ ] Step 2: Created `gemini_types.rs` with all structs
+- [ ] Step 3: Created `api_client.rs` skeleton
+- [ ] Step 4: Implemented `call_gemini_api` function
+- [ ] Step 5: Added modules to `mod.rs`
+- [ ] Step 6: Created `internal_run_gemini_api` primitive
+- [ ] Step 7: Added error handling (all cases)
+- [ ] Step 8: Added unit tests for API client
+- [ ] Step 9: Added unit tests for primitive
+- [ ] Step 10: Manual integration test passes
+
+---
+
+## Important Notes
+
+1. **API Key Management**: For Phase 1, we'll use `std::env::var("GEMINI_API_KEY")`. We'll add secure storage later.
+
+2. **Error Messages**: Make sure to include response bodies in error messages for debugging.
+
+3. **JSON Mode**: When `force_json=true`, we'll set `response_mime_type: "application/json"` in the request to force structured output.
+
+4. **Testing**: For unit tests, we should mock HTTP responses. Real API calls only in integration tests.
+

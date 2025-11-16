@@ -139,13 +139,13 @@ mod tests {
     #[tokio::test]
     async fn test_executor_creation() {
         let executor = CliExecutor::new(30);
-        assert_eq!(executor.default_timeout.as_secs(), 30);
+        assert_eq!(executor.timeout().as_secs(), 30);
     }
 
     #[tokio::test]
     async fn test_executor_with_different_timeout() {
         let executor = CliExecutor::new(60);
-        assert_eq!(executor.default_timeout.as_secs(), 60);
+        assert_eq!(executor.timeout().as_secs(), 60);
     }
 
     #[tokio::test]

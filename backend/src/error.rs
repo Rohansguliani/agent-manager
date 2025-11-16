@@ -39,6 +39,10 @@ pub enum AppError {
 
     #[error("Internal server error: {0}")]
     Internal(#[from] anyhow::Error),
+
+    #[error("Invalid plan: {0}")]
+    #[allow(dead_code)] // Will be used in Phase 2B
+    InvalidPlan(String),
 }
 
 impl IntoResponse for AppError {
@@ -52,6 +56,7 @@ impl IntoResponse for AppError {
             AppError::InvalidPath(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             AppError::PermissionDenied(_) => (StatusCode::FORBIDDEN, self.to_string()),
             AppError::NotADirectory(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+            AppError::InvalidPlan(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 

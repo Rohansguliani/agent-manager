@@ -126,6 +126,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/orchestrate/poem",
             post(api::orchestrator::orchestrate_poem),
         )
+        .route("/api/orchestrate", post(api::orchestrator::orchestrate))
         // WebSocket for real-time updates
         .route("/ws", get(websocket::websocket_handler))
         // Middleware (order matters - request_id should be first)

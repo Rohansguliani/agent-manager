@@ -3,8 +3,11 @@
 //! Contains utilities for creating SSE streams from agent execution results.
 
 use crate::api::utils::update_agent_status;
+use crate::error::AppError;
 use crate::executor::StreamingCliExecutor;
 use crate::state::{Agent, AgentStatus, AppState};
+#[allow(unused_imports)] // Used in anyhow! macro on line 51
+use anyhow::anyhow;
 use axum::{
     body::Body,
     http::{header, StatusCode},
@@ -23,13 +26,13 @@ use tokio::sync::RwLock;
 /// * `app_state` - Application state
 ///
 /// # Returns
-/// * `Response` - SSE HTTP response
+/// * `Result<Response, AppError>` - SSE HTTP response or error
 pub fn create_sse_stream(
     executor: StreamingCliExecutor,
     agent: Agent,
     query: String,
     app_state: Arc<RwLock<AppState>>,
-) -> Response {
+) -> Result<Response, AppError> {
     let stream = create_stream(executor, agent, query, app_state);
 
     let sse_stream = stream.map(|event_result| {
@@ -46,7 +49,7 @@ pub fn create_sse_stream(
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
         .body(Body::from_stream(sse_stream))
-        .unwrap()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to build SSE response: {}", e)))
 }
 
 /// Create a stream from executor results

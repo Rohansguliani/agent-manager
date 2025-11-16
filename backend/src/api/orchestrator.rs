@@ -8,8 +8,13 @@
 //! to the frontend, allowing real-time feedback on multi-step operations.
 
 use crate::error::AppError;
-use crate::orchestrator::primitives::{internal_create_file, internal_run_gemini};
+use crate::orchestrator::graph_executor::execute_plan;
+use crate::orchestrator::primitives::{
+    internal_create_file, internal_run_gemini, internal_run_planner,
+};
 use crate::state::AppState;
+#[allow(unused_imports)] // Used in map_err on lines 179 and 289
+use anyhow::anyhow;
 use axum::{
     body::Body,
     extract::State,
@@ -21,6 +26,22 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// Helper function to format a stream into SSE (Server-Sent Events) format
+///
+/// Takes a stream of `Result<String, axum::Error>` and converts it to SSE format
+/// where each item is formatted as "data: <content>\n\n"
+fn format_sse_stream(
+    stream: impl futures_util::Stream<Item = Result<String, axum::Error>> + Send + 'static,
+) -> impl futures_util::Stream<Item = Result<String, std::io::Error>> {
+    stream.map(|event_result| {
+        let sse_text = match event_result {
+            Ok(data) => format!("data: {}\n\n", data),
+            Err(e) => format!("data: [ERROR] {}\n\n", e),
+        };
+        Ok::<_, std::io::Error>(sse_text)
+    })
+}
 
 /// Orchestration request
 #[derive(Deserialize, Debug)]
@@ -64,6 +85,18 @@ pub async fn orchestrate_poem(
     State(state): State<Arc<RwLock<AppState>>>,
     Json(request): Json<OrchestrationRequest>,
 ) -> Result<Response, AppError> {
+    const MAX_GOAL_LENGTH: usize = 10000; // 10KB
+
+    // Validate input size
+    if request.goal.len() > MAX_GOAL_LENGTH {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Goal too long ({} > {} characters). Maximum allowed length is {} characters.",
+            request.goal.len(),
+            MAX_GOAL_LENGTH,
+            MAX_GOAL_LENGTH
+        )));
+    }
+
     // Get working directory from state
     let working_dir = {
         let state_read = state.read().await;
@@ -147,22 +180,142 @@ pub async fn orchestrate_poem(
         }
     };
 
-    // Convert stream to SSE format (same as query_stream)
-    let sse_stream = stream.map(|event_result| {
-        let sse_text = match event_result {
-            Ok(data) => format!("data: {}\n\n", data),
-            Err(e) => format!("data: [ERROR] {}\n\n", e),
-        };
-        Ok::<_, std::io::Error>(sse_text)
-    });
+    // Convert stream to SSE format
+    let sse_stream = format_sse_stream(stream);
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
         .body(Body::from_stream(sse_stream))
-        .unwrap())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to build response: {}", e)))
+}
+
+/// POST /api/orchestrate - Dynamic orchestrator endpoint
+///
+/// Takes a high-level goal and uses the planner agent to generate a plan,
+/// then executes the plan using GraphFlow-rs (via graph_executor).
+///
+/// This is the Phase 2B implementation - dynamic orchestration that replaces
+/// the hard-coded V1 "poem" orchestrator.
+///
+/// # Flow
+/// 1. Call planner agent to generate a JSON plan
+/// 2. Execute the plan step by step
+/// 3. Stream status updates via SSE
+///
+/// # Arguments
+/// * `State(state)` - Application state
+/// * `Json(request)` - Orchestration request with goal
+///
+/// # Returns
+/// * `Ok(Response)` - SSE stream with status updates
+/// * `Err(AppError)` - If orchestration fails
+pub async fn orchestrate(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Json(request): Json<OrchestrationRequest>,
+) -> Result<Response, AppError> {
+    use async_stream::stream;
+
+    const MAX_GOAL_LENGTH: usize = 10000; // 10KB
+
+    // Validate input size
+    if request.goal.len() > MAX_GOAL_LENGTH {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Goal too long ({} > {} characters). Maximum allowed length is {} characters.",
+            request.goal.len(),
+            MAX_GOAL_LENGTH,
+            MAX_GOAL_LENGTH
+        )));
+    }
+
+    let state_clone = state.clone();
+    let goal = request.goal;
+
+    let stream = stream! {
+        // Step 1: Planning
+        yield Ok::<String, axum::Error>(
+            r#"{"step": 0, "step_id": "planning", "message": "Planning: Generating execution plan...", "status": "running"}"#
+                .to_string(),
+        );
+
+        // Generate plan using planner agent
+        let plan = match internal_run_planner(&goal).await {
+            Ok(plan) => {
+                yield Ok::<String, axum::Error>(format!(
+                    r#"{{"step": 0, "step_id": "planning", "message": "Plan generated: {} steps", "status": "running"}}"#,
+                    plan.steps.len()
+                ));
+                plan
+            }
+            Err(e) => {
+                yield Ok::<String, axum::Error>(format!(
+                    r#"{{"step": 0, "step_id": "planning", "message": "Planning failed: {}", "status": "error"}}"#,
+                    e
+                ));
+                yield Ok::<String, axum::Error>("[DONE]".to_string());
+                return;
+            }
+        };
+
+        // Step 2: Execution - stream events as steps execute
+        // Note: execute_plan returns results after all steps complete,
+        // but we can still stream completion events for each step
+        match execute_plan(plan.clone(), &state_clone).await {
+            Ok(results) => {
+                // Stream results from each step with step_id
+                for result in &results {
+                    if result.success {
+                        yield Ok::<String, axum::Error>(format!(
+                            r#"{{"step": {}, "step_id": "{}", "message": "Step {} ({}) completed", "status": "running"}}"#,
+                            result.step_number,
+                            result.step_id,
+                            result.step_number,
+                            result.step_id
+                        ));
+                    } else {
+                        yield Ok::<String, axum::Error>(format!(
+                            r#"{{"step": {}, "step_id": "{}", "message": "Step {} ({}) failed: {}", "status": "error"}}"#,
+                            result.step_number,
+                            result.step_id,
+                            result.step_number,
+                            result.step_id,
+                            result.error.as_deref().unwrap_or("Unknown error")
+                        ));
+                        yield Ok::<String, axum::Error>("[DONE]".to_string());
+                        return;
+                    }
+                }
+
+                // All steps completed successfully
+                yield Ok::<String, axum::Error>(format!(
+                    r#"{{"step": {}, "step_id": "completion", "message": "All {} steps completed successfully!", "status": "completed"}}"#,
+                    results.len(),
+                    results.len()
+                ));
+                yield Ok::<String, axum::Error>("[DONE]".to_string());
+            }
+            Err(e) => {
+                yield Ok::<String, axum::Error>(format!(
+                    r#"{{"step": 0, "step_id": "execution_error", "message": "Execution failed: {}", "status": "error"}}"#,
+                    e
+                ));
+                yield Ok::<String, axum::Error>("[DONE]".to_string());
+            }
+        }
+    };
+
+    // Convert stream to SSE format
+    let sse_stream = format_sse_stream(stream);
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::CONNECTION, "keep-alive")
+        .body(Body::from_stream(sse_stream))
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to build response: {}", e)))
 }
 
 #[cfg(test)]
