@@ -5,6 +5,7 @@
 use crate::api::utils::update_agent_status;
 use crate::error::AppError;
 use crate::executor::StreamingCliExecutor;
+use crate::orchestrator::constants::{SSE_DONE_SIGNAL, SSE_ERROR_PREFIX};
 use crate::state::{Agent, AgentStatus, AppState};
 #[allow(unused_imports)] // Used in anyhow! macro on line 51
 use anyhow::anyhow;
@@ -38,7 +39,7 @@ pub fn create_sse_stream(
     let sse_stream = stream.map(|event_result| {
         let sse_text = match event_result {
             Ok(data) => format!("data: {}\n\n", data),
-            Err(e) => format!("data: [ERROR] {}\n\n", e),
+            Err(e) => format!("data: {} {}\n\n", SSE_ERROR_PREFIX, e),
         };
         Ok::<_, std::io::Error>(sse_text)
     });
@@ -83,11 +84,11 @@ fn create_stream(
 
                 // Process completed successfully
                 update_agent_status(&app_state, &agent_id, AgentStatus::Idle).await;
-                yield Ok("[DONE]".to_string());
+                yield Ok(SSE_DONE_SIGNAL.to_string());
             }
             Err(e) => {
                 update_agent_status(&app_state, &agent_id, AgentStatus::Error).await;
-                yield Ok(format!("[ERROR] {}", e));
+                yield Ok(format!("{} {}", SSE_ERROR_PREFIX, e));
             }
         }
     }

@@ -227,37 +227,69 @@ impl Plan {
 }
 
 /// Validation errors for plan structure
+/// Errors that can occur during plan validation
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code)] // Will be used in Phase 2B
 pub enum ValidationError {
+    /// Multiple steps have the same ID
     #[error("Duplicate step ID: {0}")]
     DuplicateStepId(String),
 
+    /// Step references a non-existent step (via content_from)
     #[error("Step '{step_id}' references non-existent step '{reference}'")]
-    InvalidReference { step_id: String, reference: String },
+    InvalidReference {
+        /// ID of the step with the invalid reference
+        step_id: String,
+        /// The invalid reference string
+        reference: String,
+    },
 
+    /// Step has an invalid task name
     #[error(
         "Step '{step_id}' has invalid task name: '{task}'. Available: run_gemini, create_file"
     )]
-    InvalidTaskName { step_id: String, task: String },
+    InvalidTaskName {
+        /// ID of the step with invalid task name
+        step_id: String,
+        /// The invalid task name
+        task: String,
+    },
 
+    /// Step is missing a required parameter for its task type
     #[error("Step '{step_id}' (task: '{task}') missing required parameter: '{param}'")]
     MissingRequiredParam {
+        /// ID of the step missing the parameter
         step_id: String,
+        /// Task type of the step
         task: String,
+        /// Name of the missing parameter
         param: String,
     },
 
+    /// Step has a circular dependency (dependency chain forms a cycle)
     #[error("Step '{step_id}' has circular dependency (cycle detected)")]
-    CircularDependency { step_id: String },
+    CircularDependency {
+        /// ID of a step involved in the cycle
+        step_id: String,
+    },
 
+    /// Step references a non-existent dependency in its dependencies array
     #[error("Step '{step_id}' references non-existent dependency '{dependency}'")]
-    InvalidDependency { step_id: String, dependency: String },
+    InvalidDependency {
+        /// ID of the step with invalid dependency
+        step_id: String,
+        /// The invalid dependency step ID
+        dependency: String,
+    },
 
+    /// Step's content_from and dependencies arrays are inconsistent
     #[error("Step '{step_id}' has inconsistent dependency: 'content_from' references '{content_from}' but 'dependencies' doesn't include '{missing_dependency}'")]
     InconsistentDependency {
+        /// ID of the step with inconsistent dependencies
         step_id: String,
+        /// The content_from reference string
         content_from: String,
+        /// The missing dependency that should be in dependencies array
         missing_dependency: String,
     },
 }

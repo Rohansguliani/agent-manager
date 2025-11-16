@@ -16,9 +16,13 @@ use tokio::sync::RwLock;
 /// Agent response type
 #[derive(Debug, Serialize)]
 pub struct AgentResponse {
+    /// Unique identifier for the agent
     pub id: AgentId,
+    /// Human-readable name of the agent
     pub name: String,
+    /// Type of agent (e.g., Gemini, OpenAI)
     pub agent_type: AgentType,
+    /// Current status of the agent (Running, Stopped, etc.)
     pub status: AgentStatus,
 }
 
@@ -36,29 +40,38 @@ impl From<&Agent> for AgentResponse {
 /// Agents list response
 #[derive(Serialize)]
 pub struct AgentsListResponse {
+    /// List of all agents
     pub agents: Vec<AgentResponse>,
+    /// Total number of agents
     pub count: usize,
 }
 
 /// Message response
 #[derive(Serialize)]
 pub struct MessageResponse {
+    /// Human-readable message
     pub message: String,
+    /// Status indicator (e.g., "ok", "error")
     pub status: String,
 }
 
 /// Create agent request
 #[derive(Deserialize)]
 pub struct CreateAgentRequest {
+    /// Name for the new agent
     pub name: String,
+    /// Type of agent to create
     pub agent_type: AgentType,
 }
 
 /// Update agent request
 #[derive(Deserialize)]
 pub struct UpdateAgentRequest {
+    /// New name for the agent (optional)
     pub name: Option<String>,
+    /// New agent type (optional)
     pub agent_type: Option<AgentType>,
+    /// New status for the agent (optional)
     pub status: Option<AgentStatus>,
 }
 

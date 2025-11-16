@@ -17,23 +17,45 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
+/// WebSocket message types for real-time communication
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 pub enum WebSocketMessage {
+    /// Agent status update message
     #[serde(rename = "agent_status_update")]
     AgentStatusUpdate {
+        /// ID of the agent whose status changed
         agent_id: AgentId,
+        /// New status of the agent
         status: AgentStatus,
     },
+    /// Agent output message
     #[serde(rename = "agent_output")]
-    AgentOutput { agent_id: AgentId, output: String },
+    AgentOutput {
+        /// ID of the agent that produced the output
+        agent_id: AgentId,
+        /// Output content from the agent
+        output: String,
+    },
+    /// Ping message for connection keepalive
     #[serde(rename = "ping")]
     Ping,
+    /// Pong message responding to ping
     #[serde(rename = "pong")]
     Pong,
 }
 
-// WebSocket upgrade handler
+/// WebSocket upgrade handler
+///
+/// Handles WebSocket connection upgrade and sets up message handlers.
+/// Sends initial state to the client and maintains connection with ping/pong.
+///
+/// # Arguments
+/// * `ws` - WebSocket upgrade request
+/// * `state` - Application state for agent registry
+///
+/// # Returns
+/// * `Response` - HTTP response initiating WebSocket connection
 pub async fn websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<RwLock<AppState>>>,
@@ -155,7 +177,15 @@ async fn handle_socket(socket: WebSocket, state: Arc<RwLock<AppState>>) {
     info!("WebSocket connection closed");
 }
 
-// Helper function to broadcast agent status updates
+/// Helper function to broadcast agent status updates to all connected WebSocket clients
+///
+/// Currently a placeholder for future WebSocket broadcast functionality.
+/// Will maintain a list of connected clients and send status updates to all.
+///
+/// # Arguments
+/// * `state` - Application state
+/// * `agent_id` - ID of the agent whose status changed
+/// * `status` - New status of the agent
 #[allow(dead_code)] // Reserved for future WebSocket functionality
 pub async fn broadcast_agent_status(
     state: &Arc<RwLock<AppState>>,

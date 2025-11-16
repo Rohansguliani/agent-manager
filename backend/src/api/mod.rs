@@ -5,6 +5,7 @@
 pub mod agents;
 pub mod files;
 pub mod orchestrator;
+pub mod orchestrator_graph;
 pub mod queries;
 pub mod streaming;
 pub mod utils;

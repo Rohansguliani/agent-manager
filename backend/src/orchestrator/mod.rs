@@ -9,11 +9,13 @@
 
 pub mod api_client;
 pub mod config;
+pub mod constants;
 pub mod gemini_types;
 pub mod graph_executor;
-// TODO(Phase 4D): Implement full GraphFlow-rs integration
-pub mod graph_flow_adapter;
+pub mod plan_optimizer;
 pub mod plan_to_graph;
 pub mod plan_types;
+pub mod plan_utils;
 pub mod primitives;
 pub mod tasks;
+pub mod utils;

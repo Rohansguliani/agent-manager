@@ -1,5 +1,7 @@
-// Application state management
-// Contains agent registry, selected agent, and UI state
+//! Application state management
+//!
+//! Contains agent registry, selected agent, working directory context, and UI state.
+//! This module manages the core application state that persists across requests.
 
 use crate::state::config::{AgentConfig, AgentType};
 use serde::{Deserialize, Serialize};
@@ -88,7 +90,7 @@ impl Agent {
 
 /// Main application state
 /// Manages all application-wide state including agents and UI preferences
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct AppState {
     /// Registry of all agents (id -> Agent)
     pub agents: HashMap<AgentId, Agent>,

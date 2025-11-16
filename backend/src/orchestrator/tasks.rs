@@ -12,73 +12,12 @@
 //! They use graph_flow::Context for state management and store outputs
 //! using keys like "step_X.output" in the context.
 
-use crate::error::AppError;
 use crate::orchestrator::primitives::{internal_create_file, internal_run_gemini};
 use crate::state::AppState;
 use async_trait::async_trait;
 use graph_flow::{Context, NextAction, Result as GraphFlowResult, Task, TaskResult};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-
-/// Execution context that stores outputs from previous steps
-///
-/// DEPRECATED: This is being phased out in favor of graph_flow::Context.
-/// Kept temporarily for backward compatibility with legacy executor (which is now removed).
-/// Will be fully removed in Phase 4J cleanup.
-#[derive(Debug, Clone, Default)]
-#[allow(dead_code)] // Deprecated - kept for backward compatibility
-pub struct ExecutionContext {
-    /// Map of step_id -> output string
-    outputs: HashMap<String, String>,
-    /// Working directory for file operations
-    working_dir: Option<String>,
-}
-
-#[allow(dead_code)] // Deprecated - kept for backward compatibility
-impl ExecutionContext {
-    /// Create a new execution context
-    pub fn new(working_dir: Option<String>) -> Self {
-        Self {
-            outputs: HashMap::new(),
-            working_dir,
-        }
-    }
-
-    /// Store the output of a step
-    pub fn set_output(&mut self, step_id: &str, output: String) {
-        self.outputs.insert(step_id.to_string(), output);
-    }
-
-    /// Get the output of a step
-    pub fn get_output(&self, step_id: &str) -> Option<&String> {
-        self.outputs.get(step_id)
-    }
-
-    /// Get working directory
-    pub fn working_dir(&self) -> Option<&str> {
-        self.working_dir.as_deref()
-    }
-}
-
-/// Trait for tasks that can be executed as part of a plan
-///
-/// DEPRECATED: This trait is being phased out in favor of graph_flow::Task.
-/// It's kept temporarily for backward compatibility (tests).
-/// Will be removed in Phase 4J cleanup.
-#[async_trait::async_trait]
-#[allow(dead_code)] // Deprecated - kept for backward compatibility
-pub trait PlanTask: Send + Sync {
-    /// Unique identifier for this task
-    fn id(&self) -> &str;
-
-    /// Execute the task with the given context
-    async fn execute(
-        &self,
-        context: &mut ExecutionContext,
-        app_state: &Arc<RwLock<AppState>>,
-    ) -> Result<String, AppError>;
-}
 
 /// Task that runs Gemini with a prompt
 ///
@@ -138,8 +77,9 @@ impl Task for RunGeminiTask {
                 ))
             })?;
 
-        // Store output in context for next steps (key: "step_X.output")
-        let output_key = format!("{}.output", self.step_id);
+        // Store output in context for next steps
+        use crate::orchestrator::constants::STEP_OUTPUT_SUFFIX;
+        let output_key = format!("{}{}", self.step_id, STEP_OUTPUT_SUFFIX);
         context.set(&output_key, output.clone()).await;
 
         tracing::debug!(
@@ -149,40 +89,6 @@ impl Task for RunGeminiTask {
         );
 
         Ok(TaskResult::new(Some(output.clone()), NextAction::Continue))
-    }
-}
-
-// Keep PlanTask implementation for backward compatibility with current executor
-#[async_trait::async_trait]
-impl PlanTask for RunGeminiTask {
-    fn id(&self) -> &str {
-        &self.step_id
-    }
-
-    async fn execute(
-        &self,
-        context: &mut ExecutionContext,
-        app_state: &Arc<RwLock<AppState>>,
-    ) -> Result<String, AppError> {
-        tracing::debug!(
-            step_id = %self.step_id,
-            prompt_len = self.prompt.len(),
-            "Executing RunGeminiTask (legacy PlanTask)"
-        );
-
-        // Execute Gemini
-        let output = internal_run_gemini(app_state, &self.prompt).await?;
-
-        // Store output in context for next steps
-        context.set_output(&self.step_id, output.clone());
-
-        tracing::debug!(
-            step_id = %self.step_id,
-            output_len = output.len(),
-            "RunGeminiTask completed (legacy PlanTask)"
-        );
-
-        Ok(output)
     }
 }
 
@@ -271,7 +177,8 @@ impl Task for CreateFileTask {
         // Get working directory from context or app_state
         let working_dir = {
             // Try to get from context first (set by graph builder)
-            if let Some(wd) = context.get::<String>("working_dir").await {
+            use crate::orchestrator::constants::WORKING_DIR_KEY;
+            if let Some(wd) = context.get::<String>(WORKING_DIR_KEY).await {
                 Some(wd)
             } else {
                 // Fall back to app_state
@@ -309,8 +216,9 @@ impl Task for CreateFileTask {
                 ))
             })?;
 
-        // Store output in context (the file path) using key "step_X.output"
-        let output_key = format!("{}.output", self.step_id);
+        // Store output in context (the file path)
+        use crate::orchestrator::constants::STEP_OUTPUT_SUFFIX;
+        let output_key = format!("{}{}", self.step_id, STEP_OUTPUT_SUFFIX);
         context.set(&output_key, file_path.clone()).await;
 
         tracing::debug!(
@@ -326,84 +234,11 @@ impl Task for CreateFileTask {
     }
 }
 
-// Keep PlanTask implementation for backward compatibility with current executor
-#[async_trait::async_trait]
-impl PlanTask for CreateFileTask {
-    fn id(&self) -> &str {
-        &self.step_id
-    }
-
-    async fn execute(
-        &self,
-        context: &mut ExecutionContext,
-        _app_state: &Arc<RwLock<AppState>>,
-    ) -> Result<String, AppError> {
-        tracing::debug!(
-            step_id = %self.step_id,
-            filename = %self.filename,
-            "Executing CreateFileTask (legacy PlanTask)"
-        );
-
-        // Validate filename for path traversal protection
-        if self.filename.contains("..") || self.filename.starts_with('/') {
-            return Err(AppError::InvalidPath(format!(
-                "Filename '{}' in step '{}' contains invalid characters (path traversal detected or absolute path)",
-                self.filename, self.step_id
-            )));
-        }
-
-        // Also check for null bytes and other dangerous characters
-        if self.filename.contains('\0') || self.filename.chars().any(|c| c.is_control()) {
-            return Err(AppError::InvalidPath(format!(
-                "Filename '{}' in step '{}' contains invalid characters (control characters detected)",
-                self.filename, self.step_id
-            )));
-        }
-
-        // Get content from context or use direct content
-        let content = if let Some(ref content_from) = self.content_from {
-            // Parse "step_1.output" -> "step_1"
-            let referenced_step_id = content_from.split('.').next().unwrap_or(content_from);
-            context
-                .get_output(referenced_step_id)
-                .ok_or_else(|| {
-                    AppError::Internal(anyhow::anyhow!(
-                        "Step '{}' references output from '{}' but that step has not been executed yet",
-                        self.step_id,
-                        referenced_step_id
-                    ))
-                })?
-                .clone()
-        } else if let Some(ref direct) = self.direct_content {
-            direct.clone()
-        } else {
-            return Err(AppError::Internal(anyhow::anyhow!(
-                "CreateFileTask '{}' has no content source (neither content_from nor direct_content)",
-                self.step_id
-            )));
-        };
-
-        // Create the file
-        let file_path =
-            internal_create_file(&self.filename, &content, context.working_dir()).await?;
-
-        // Store output in context (the file path)
-        context.set_output(&self.step_id, file_path.clone());
-
-        tracing::debug!(
-            step_id = %self.step_id,
-            file_path = %file_path,
-            "CreateFileTask completed (legacy PlanTask)"
-        );
-
-        Ok(file_path)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::AppState;
+    use graph_flow::Context;
     use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::sync::RwLock;
@@ -412,14 +247,12 @@ mod tests {
         Arc::new(RwLock::new(AppState::new()))
     }
 
-    #[test]
-    fn test_execution_context() {
-        let mut ctx = ExecutionContext::new(Some("/tmp".to_string()));
+    #[tokio::test]
+    async fn test_run_gemini_task_structure() {
+        let task = RunGeminiTask::new("step_1".to_string(), "test prompt".to_string());
+        assert_eq!(task.id(), "step_1");
 
-        ctx.set_output("step_1", "Hello, world!".to_string());
-        assert_eq!(ctx.get_output("step_1"), Some(&"Hello, world!".to_string()));
-        assert_eq!(ctx.get_output("step_2"), None);
-        assert_eq!(ctx.working_dir(), Some("/tmp"));
+        // Full execution test would require Gemini CLI, which is tested elsewhere
     }
 
     #[tokio::test]
@@ -427,20 +260,31 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let work_dir = temp_dir.path().to_str().unwrap().to_string();
 
-        let mut ctx = ExecutionContext::new(Some(work_dir.clone()));
-        ctx.set_output("step_1", "Test content".to_string());
+        let ctx = Context::new();
+        // Set content in context as graph-flow does (key: "step_1.output")
+        use crate::orchestrator::constants::STEP_OUTPUT_SUFFIX;
+        ctx.set(
+            &format!("step_1{}", STEP_OUTPUT_SUFFIX),
+            "Test content".to_string(),
+        )
+        .await;
+        use crate::orchestrator::constants::WORKING_DIR_KEY;
+        ctx.set(WORKING_DIR_KEY, work_dir.clone()).await;
 
+        let state = create_test_state();
         let task = CreateFileTask::new(
             "step_2".to_string(),
             "test.txt".to_string(),
             Some("step_1.output".to_string()),
-        );
+        )
+        .with_app_state(state);
 
-        let state = create_test_state();
-        let result = task.execute(&mut ctx, &state).await;
+        let result = task.run(ctx).await;
 
         assert!(result.is_ok());
-        let file_path = result.unwrap();
+        let task_result = result.unwrap();
+        let file_path = task_result.response.unwrap();
+
         assert!(std::path::Path::new(&file_path).exists());
 
         // Verify content
@@ -453,31 +297,22 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let work_dir = temp_dir.path().to_str().unwrap().to_string();
 
-        let mut ctx = ExecutionContext::new(Some(work_dir));
+        let ctx = Context::new();
+        ctx.set("working_dir", work_dir).await;
 
+        let state = create_test_state();
         let task = CreateFileTask::new(
             "step_2".to_string(),
             "test.txt".to_string(),
             Some("step_999.output".to_string()), // Non-existent step
-        );
+        )
+        .with_app_state(state);
 
-        let state = create_test_state();
-        let result = task.execute(&mut ctx, &state).await;
+        let result = task.run(ctx).await;
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("not been executed"));
-    }
-
-    #[tokio::test]
-    async fn test_run_gemini_task_structure() {
-        let task = RunGeminiTask::new("step_1".to_string(), "test prompt".to_string());
-        // Both traits have id() method - use PlanTask for backward compatibility check
-        assert_eq!(PlanTask::id(&task), "step_1");
-
-        // Full execution test would require Gemini CLI, which is tested elsewhere
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("not been executed"));
     }
 
     #[test]
@@ -485,9 +320,8 @@ mod tests {
         let task = CreateFileTask::new("step_1".to_string(), "../etc/passwd".to_string(), None);
 
         // Task should be created, but execution should fail
-        // Both traits have id() method - use PlanTask for backward compatibility check
-        assert_eq!(PlanTask::id(&task), "step_1");
-        // Note: Actual validation happens in execute(), which is tested in test_create_file_task_* tests
+        assert_eq!(task.id(), "step_1");
+        // Note: Actual validation happens in run(), which is tested in test_create_file_task_rejects_path_traversal
     }
 
     #[tokio::test]
@@ -495,17 +329,24 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let work_dir = temp_dir.path().to_str().unwrap().to_string();
 
-        let mut ctx = ExecutionContext::new(Some(work_dir));
-        ctx.set_output("step_1", "Test content".to_string());
+        let ctx = Context::new();
+        use crate::orchestrator::constants::STEP_OUTPUT_SUFFIX;
+        ctx.set(
+            &format!("step_1{}", STEP_OUTPUT_SUFFIX),
+            "Test content".to_string(),
+        )
+        .await;
+        ctx.set("working_dir", work_dir).await;
 
+        let state = create_test_state();
         let task = CreateFileTask::new(
             "step_2".to_string(),
             "../etc/passwd".to_string(), // Path traversal attempt
             Some("step_1.output".to_string()),
-        );
+        )
+        .with_app_state(state);
 
-        let state = create_test_state();
-        let result = task.execute(&mut ctx, &state).await;
+        let result = task.run(ctx).await;
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -521,17 +362,24 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let work_dir = temp_dir.path().to_str().unwrap().to_string();
 
-        let mut ctx = ExecutionContext::new(Some(work_dir));
-        ctx.set_output("step_1", "Test content".to_string());
+        let ctx = Context::new();
+        use crate::orchestrator::constants::STEP_OUTPUT_SUFFIX;
+        ctx.set(
+            &format!("step_1{}", STEP_OUTPUT_SUFFIX),
+            "Test content".to_string(),
+        )
+        .await;
+        ctx.set("working_dir", work_dir).await;
 
+        let state = create_test_state();
         let task = CreateFileTask::new(
             "step_2".to_string(),
             "test\0file.txt".to_string(), // Null byte
             Some("step_1.output".to_string()),
-        );
+        )
+        .with_app_state(state);
 
-        let state = create_test_state();
-        let result = task.execute(&mut ctx, &state).await;
+        let result = task.run(ctx).await;
 
         assert!(result.is_err());
         assert!(result

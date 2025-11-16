@@ -105,7 +105,8 @@ pub fn build_graph_from_plan(
     }
 
     // Build graph
-    let mut builder = GraphBuilder::new("plan_execution");
+    use crate::orchestrator::constants::DEFAULT_GRAPH_ID;
+    let mut builder = GraphBuilder::new(DEFAULT_GRAPH_ID);
 
     // Add all tasks to the graph
     for task in task_map.values() {
@@ -120,17 +121,12 @@ pub fn build_graph_from_plan(
     }
 
     // Set start task (first step with no dependencies, or first step if all have dependencies)
-    let start_task_id = plan
-        .steps
-        .iter()
-        .find(|step| step.dependencies.is_empty())
-        .map(|step| step.id.as_str())
-        .or_else(|| plan.steps.first().map(|step| step.id.as_str()))
-        .ok_or_else(|| {
-            AppError::Internal(anyhow!(
-                "Plan has no steps (this should not happen after validation)"
-            ))
-        })?;
+    use crate::orchestrator::plan_utils::find_start_step_id;
+    let start_task_id = find_start_step_id(&plan).ok_or_else(|| {
+        AppError::Internal(anyhow!(
+            "Plan has no steps (this should not happen after validation)"
+        ))
+    })?;
 
     builder = builder.set_start_task(start_task_id);
 
@@ -182,7 +178,8 @@ mod tests {
 
         assert!(result.is_ok());
         let graph = result.unwrap();
-        assert_eq!(graph.id, "plan_execution");
+        use crate::orchestrator::constants::DEFAULT_GRAPH_ID;
+        assert_eq!(graph.id, DEFAULT_GRAPH_ID);
     }
 
     #[test]
@@ -226,7 +223,8 @@ mod tests {
 
         assert!(result.is_ok());
         let graph = result.unwrap();
-        assert_eq!(graph.id, "plan_execution");
+        use crate::orchestrator::constants::DEFAULT_GRAPH_ID;
+        assert_eq!(graph.id, DEFAULT_GRAPH_ID);
     }
 
     #[test]
@@ -373,5 +371,98 @@ mod tests {
             }
             Ok(_) => panic!("Expected error for path traversal"),
         }
+    }
+
+    #[test]
+    fn test_build_graph_sets_start_task() {
+        // Test that the graph builder correctly identifies and sets the start task
+        let plan = Plan {
+            version: "1.0".to_string(),
+            steps: vec![
+                Step {
+                    id: "step_1".to_string(),
+                    task: "run_gemini".to_string(),
+                    params: StepParams {
+                        prompt: Some("Test 1".to_string()),
+                        ..Default::default()
+                    },
+                    dependencies: vec![],
+                },
+                Step {
+                    id: "step_2".to_string(),
+                    task: "run_gemini".to_string(),
+                    params: StepParams {
+                        prompt: Some("Test 2".to_string()),
+                        ..Default::default()
+                    },
+                    dependencies: vec!["step_1".to_string()],
+                },
+            ],
+        };
+
+        let state = create_test_state();
+        let result = build_graph_from_plan(plan, state);
+
+        assert!(result.is_ok());
+        let graph = result.unwrap();
+        use crate::orchestrator::constants::DEFAULT_GRAPH_ID;
+        assert_eq!(graph.id, DEFAULT_GRAPH_ID);
+        // The start task should be step_1 (first independent step)
+    }
+
+    #[test]
+    fn test_build_graph_with_complex_dependencies() {
+        // Test graph building with a complex dependency structure
+        let plan = Plan {
+            version: "1.0".to_string(),
+            steps: vec![
+                Step {
+                    id: "step_1".to_string(),
+                    task: "run_gemini".to_string(),
+                    params: StepParams {
+                        prompt: Some("Test 1".to_string()),
+                        ..Default::default()
+                    },
+                    dependencies: vec![],
+                },
+                Step {
+                    id: "step_2".to_string(),
+                    task: "run_gemini".to_string(),
+                    params: StepParams {
+                        prompt: Some("Test 2".to_string()),
+                        ..Default::default()
+                    },
+                    dependencies: vec![],
+                },
+                Step {
+                    id: "step_3".to_string(),
+                    task: "run_gemini".to_string(),
+                    params: StepParams {
+                        prompt: Some("Test 3".to_string()),
+                        ..Default::default()
+                    },
+                    dependencies: vec!["step_1".to_string()],
+                },
+                Step {
+                    id: "step_4".to_string(),
+                    task: "create_file".to_string(),
+                    params: StepParams {
+                        filename: Some("output.txt".to_string()),
+                        content_from: Some("step_3.output".to_string()),
+                        ..Default::default()
+                    },
+                    dependencies: vec!["step_2".to_string(), "step_3".to_string()],
+                },
+            ],
+        };
+
+        let state = create_test_state();
+        let result = build_graph_from_plan(plan, state);
+
+        assert!(result.is_ok());
+        let graph = result.unwrap();
+        use crate::orchestrator::constants::DEFAULT_GRAPH_ID;
+        assert_eq!(graph.id, DEFAULT_GRAPH_ID);
+        // Graph should have 4 tasks with proper dependency edges
     }
 }

@@ -6,10 +6,11 @@
  */
 
 import { useState, useCallback } from 'react'
-import { api, OrchestrationStatus } from '../api'
+import { api, OrchestrationStatus, OrchestrationEvent } from '../api'
 
 interface UseOrchestratorReturn {
   stepStatuses: Record<string, OrchestrationStatus> // Map of step_id -> status for parallel tracking
+  events: OrchestrationEvent[] // Phase 6.3: Structured events for live graph updates
   running: boolean
   error: string | null
   runOrchestration: (goal: string, useDynamic?: boolean) => Promise<void>
@@ -24,11 +25,14 @@ interface UseOrchestratorReturn {
 export function useOrchestrator(): UseOrchestratorReturn {
   // Use Record (object) instead of array to support parallel execution tracking
   const [stepStatuses, setStepStatuses] = useState<Record<string, OrchestrationStatus>>({})
+  // Phase 6.3: Structured events for live graph updates
+  const [events, setEvents] = useState<OrchestrationEvent[]>([])
   const [running, setRunning] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
 
   const clearStatus = useCallback(() => {
     setStepStatuses({})
+    setEvents([])
     setError(null)
   }, [])
 
@@ -36,6 +40,7 @@ export function useOrchestrator(): UseOrchestratorReturn {
     setRunning(true)
     setError(null)
     setStepStatuses({})
+    setEvents([])
 
     try {
       const fetchResponse = useDynamic
@@ -79,29 +84,84 @@ export function useOrchestrator(): UseOrchestratorReturn {
                 return
                   } else {
                     try {
-                      const statusUpdate: OrchestrationStatus = JSON.parse(data)
-                      // Update status by step_id (supports parallel execution)
-                      // If step_id is missing, generate a unique one
-                      const stepId = statusUpdate.step_id || `step_${statusUpdate.step || 'unknown'}`
-                      const statusWithId: OrchestrationStatus = {
-                        ...statusUpdate,
-                        step_id: stepId,
-                      }
+                      // Phase 6.3: Try parsing as structured event first
+                      const parsed = JSON.parse(data)
                       
-                      // Update status map (upsert by step_id)
-                      setStepStatuses((prev) => ({
-                        ...prev,
-                        [stepId]: statusWithId,
-                      }))
-                      
-                      if (statusUpdate.status === 'completed' || statusUpdate.status === 'error') {
-                        setRunning(false)
-                        if (statusUpdate.status === 'error') {
-                          setError(statusUpdate.message)
+                      // Check if it's a structured OrchestrationEvent
+                      if (parsed.type) {
+                        const event = parsed as OrchestrationEvent
+                        setEvents((prev) => [...prev, event])
+                        
+                        // Convert structured event to OrchestrationStatus for backward compatibility
+                        let statusUpdate: OrchestrationStatus | null = null
+                        
+                        if (event.type === 'step_start') {
+                          statusUpdate = {
+                            step: event.step_number,
+                            step_id: event.step_id,
+                            message: `Step ${event.step_number} (${event.task}) starting`,
+                            status: 'running',
+                          }
+                        } else if (event.type === 'step_complete') {
+                          statusUpdate = {
+                            step: event.step_number,
+                            step_id: event.step_id,
+                            message: `Step ${event.step_number} completed`,
+                            status: 'completed',
+                          }
+                        } else if (event.type === 'step_error') {
+                          statusUpdate = {
+                            step: event.step_number,
+                            step_id: event.step_id,
+                            message: `Step ${event.step_number} failed: ${event.error}`,
+                            status: 'error',
+                          }
+                        } else if (event.type === 'execution_complete') {
+                          setRunning(false)
+                          statusUpdate = {
+                            step: event.total_steps,
+                            step_id: 'completion',
+                            message: `All ${event.total_steps} steps completed successfully!`,
+                            status: 'completed',
+                          }
+                        } else if (event.type === 'execution_error') {
+                          setRunning(false)
+                          setError(event.error)
+                          statusUpdate = {
+                            step: 0,
+                            step_id: 'execution_error',
+                            message: event.error,
+                            status: 'error',
+                          }
                         }
-                        // Don't return early - continue reading to get [DONE] signal
-                        // This ensures the stream is properly closed
-                        continue
+                        
+                        if (statusUpdate) {
+                          const stepId = statusUpdate.step_id
+                          setStepStatuses((prev) => ({
+                            ...prev,
+                            [stepId]: statusUpdate!,
+                          }))
+                        }
+                      } else {
+                        // Backward compatibility: parse as old OrchestrationStatus format
+                        const statusUpdate = parsed as OrchestrationStatus
+                        const stepId = statusUpdate.step_id || `step_${statusUpdate.step || 'unknown'}`
+                        const statusWithId: OrchestrationStatus = {
+                          ...statusUpdate,
+                          step_id: stepId,
+                        }
+                        
+                        setStepStatuses((prev) => ({
+                          ...prev,
+                          [stepId]: statusWithId,
+                        }))
+                        
+                        if (statusUpdate.status === 'completed' || statusUpdate.status === 'error') {
+                          setRunning(false)
+                          if (statusUpdate.status === 'error') {
+                            setError(statusUpdate.message)
+                          }
+                        }
                       }
                     } catch {
                       // Invalid JSON, skip
@@ -122,6 +182,7 @@ export function useOrchestrator(): UseOrchestratorReturn {
 
   return {
     stepStatuses,
+    events, // Phase 6.3: Structured events
     running,
     error,
     runOrchestration,

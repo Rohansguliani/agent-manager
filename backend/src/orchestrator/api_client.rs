@@ -4,13 +4,13 @@
 //! This is used by the "Planner" agent to get structured JSON responses.
 
 use crate::error::AppError;
+use crate::orchestrator::config::OrchestratorConfig;
 use crate::orchestrator::gemini_types::{
     GeminiApiRequest, GeminiApiResponse, GenerationConfig, RequestContent, RequestPart,
 };
 use anyhow::anyhow;
 
 const GEMINI_API_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
-const DEFAULT_MODEL: &str = "gemini-2.5-flash";
 
 /// Call Gemini API directly with a prompt
 ///
@@ -32,17 +32,27 @@ const DEFAULT_MODEL: &str = "gemini-2.5-flash";
 /// * Returns `AppError::Internal` if API key is missing, HTTP request fails,
 ///   response parsing fails, or no valid content is found in the response.
 pub async fn call_gemini_api(
+    client: &reqwest::Client,
     api_key: &str,
     prompt: &str,
     model: Option<&str>,
     force_json: bool,
 ) -> Result<String, AppError> {
-    call_gemini_api_with_base_url(api_key, prompt, model, force_json, GEMINI_API_BASE_URL).await
+    call_gemini_api_with_base_url(
+        client,
+        api_key,
+        prompt,
+        model,
+        force_json,
+        GEMINI_API_BASE_URL,
+    )
+    .await
 }
 
 /// Internal function that allows custom base URL (for testing)
 #[allow(dead_code)] // Used in tests
 async fn call_gemini_api_with_base_url(
+    client: &reqwest::Client,
     api_key: &str,
     prompt: &str,
     model: Option<&str>,
@@ -53,7 +63,8 @@ async fn call_gemini_api_with_base_url(
         return Err(AppError::Internal(anyhow!("API key is empty")));
     }
 
-    let model_name = model.unwrap_or(DEFAULT_MODEL);
+    let config = OrchestratorConfig::default();
+    let model_name = model.unwrap_or(&config.gemini_model);
     let url = format!(
         "{}/models/{}:generateContent?key={}",
         base_url, model_name, api_key
@@ -84,10 +95,7 @@ async fn call_gemini_api_with_base_url(
         "Calling Gemini API"
     );
 
-    // Create HTTP client
-    let client = reqwest::Client::new();
-
-    // Make POST request
+    // Make POST request using shared client (connection pooling)
     let response = client
         .post(&url)
         .json(&request_body)
@@ -187,7 +195,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_gemini_api_empty_api_key() {
-        let result = call_gemini_api("", "test prompt", None, false).await;
+        let client = reqwest::Client::new();
+        let result = call_gemini_api(&client, "", "test prompt", None, false).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("API key is empty"));
     }
@@ -220,8 +229,16 @@ mod tests {
             .await;
 
         let base_url = &server.url();
-        let result =
-            call_gemini_api_with_base_url("test-key", "test prompt", None, false, base_url).await;
+        let client = reqwest::Client::new();
+        let result = call_gemini_api_with_base_url(
+            &client,
+            "test-key",
+            "test prompt",
+            None,
+            false,
+            base_url,
+        )
+        .await;
 
         mock.assert_async().await;
         assert!(result.is_ok());
@@ -256,7 +273,9 @@ mod tests {
             .await;
 
         let base_url = &server.url();
+        let client = reqwest::Client::new();
         let result = call_gemini_api_with_base_url(
+            &client,
             "test-key",
             "test prompt",
             None,
@@ -289,8 +308,16 @@ mod tests {
             .await;
 
         let base_url = &server.url();
-        let result =
-            call_gemini_api_with_base_url("test-key", "test prompt", None, false, base_url).await;
+        let client = reqwest::Client::new();
+        let result = call_gemini_api_with_base_url(
+            &client,
+            "test-key",
+            "test prompt",
+            None,
+            false,
+            base_url,
+        )
+        .await;
 
         mock.assert_async().await;
         assert!(result.is_err());
@@ -320,8 +347,16 @@ mod tests {
             .await;
 
         let base_url = &server.url();
-        let result =
-            call_gemini_api_with_base_url("test-key", "test prompt", None, false, base_url).await;
+        let client = reqwest::Client::new();
+        let result = call_gemini_api_with_base_url(
+            &client,
+            "test-key",
+            "test prompt",
+            None,
+            false,
+            base_url,
+        )
+        .await;
 
         mock.assert_async().await;
         assert!(result.is_err());
@@ -349,8 +384,16 @@ mod tests {
             .await;
 
         let base_url = &server.url();
-        let result =
-            call_gemini_api_with_base_url("test-key", "test prompt", None, false, base_url).await;
+        let client = reqwest::Client::new();
+        let result = call_gemini_api_with_base_url(
+            &client,
+            "test-key",
+            "test prompt",
+            None,
+            false,
+            base_url,
+        )
+        .await;
 
         mock.assert_async().await;
         assert!(result.is_err());
@@ -374,8 +417,16 @@ mod tests {
             .await;
 
         let base_url = &server.url();
-        let result =
-            call_gemini_api_with_base_url("test-key", "test prompt", None, false, base_url).await;
+        let client = reqwest::Client::new();
+        let result = call_gemini_api_with_base_url(
+            &client,
+            "test-key",
+            "test prompt",
+            None,
+            false,
+            base_url,
+        )
+        .await;
 
         mock.assert_async().await;
         assert!(result.is_err());
@@ -389,7 +440,9 @@ mod tests {
     async fn test_call_gemini_api_invalid_api_key_real() {
         // This will fail with a real HTTP request, but we're testing error handling
         // In a real scenario, this would hit the real API with an invalid key
-        let result = call_gemini_api("invalid-key-12345", "test prompt", None, false).await;
+        let client = reqwest::Client::new();
+        let result =
+            call_gemini_api(&client, "invalid-key-12345", "test prompt", None, false).await;
         // Should return an error (either HTTP error or parsing error)
         assert!(result.is_err());
     }

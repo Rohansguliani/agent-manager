@@ -211,6 +211,61 @@ export const api = {
 
     return response;
   },
+
+  // Phase 6.1: Pre-flight check - Plan + Optimizer (no execution)
+  async plan(goal: string): Promise<PlanAnalysisResponse> {
+    const response = await fetch(`${API_URL}/api/plan`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ goal }),
+    });
+
+    if (!response.ok) {
+      throw new ApiError(
+        `HTTP ${response.status}: ${response.statusText}`,
+        response.status
+      );
+    }
+
+    return handleResponse<PlanAnalysisResponse>(response);
+  },
+
+  // Phase 6.2: Graph visualization
+  async getGraph(goal: string): Promise<GraphStructure> {
+    const response = await fetch(`${API_URL}/api/orchestrate/graph?goal=${encodeURIComponent(goal)}`, {
+      method: 'GET',
+    });
+
+    if (!response.ok) {
+      throw new ApiError(
+        `HTTP ${response.status}: ${response.statusText}`,
+        response.status
+      );
+    }
+
+    return handleResponse<GraphStructure>(response);
+  },
+
+  // Phase 6.4: Settings Panel
+  async getConfig(): Promise<OrchestratorConfig> {
+    const response = await fetch(`${API_URL}/api/config`, {
+      method: 'GET',
+    });
+    return handleResponse<OrchestratorConfig>(response);
+  },
+
+  async updateConfig(config: Partial<OrchestratorConfig>): Promise<OrchestratorConfig> {
+    const response = await fetch(`${API_URL}/api/config`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(config),
+    });
+    return handleResponse<OrchestratorConfig>(response);
+  },
 };
 
 // File system types
@@ -241,6 +296,70 @@ export interface OrchestrationStatus {
   step_id: string; // Required for parallel tracking
   message: string;
   status: 'running' | 'completed' | 'error' | 'pending'; // Added 'pending' for steps waiting on dependencies
+}
+
+// Phase 6.3: Structured orchestration events
+export type OrchestrationEvent =
+  | { type: 'plan_generated'; step_count: number; estimated_tokens: number; estimated_time_secs: number }
+  | { type: 'step_start'; step_id: string; step_number: number; task: string }
+  | { type: 'step_complete'; step_id: string; step_number: number; output: string }
+  | { type: 'step_error'; step_id: string; step_number: number; error: string }
+  | { type: 'execution_complete'; total_steps: number; successful_steps: number }
+  | { type: 'execution_error'; error: string }
+
+// Phase 6.1: Pre-flight check response
+export interface PlanAnalysisResponse {
+  plan: Plan;
+  estimated_tokens: number;
+  estimated_time_secs: number;
+  bottlenecks: BottleneckAnalysis;
+}
+
+export interface Plan {
+  version: string;
+  steps: PlanStep[];
+}
+
+export interface PlanStep {
+  id: string;
+  task: string;
+  params: PlanStepParams;
+  dependencies: string[];
+}
+
+export interface PlanStepParams {
+  prompt?: string;
+  filename?: string;
+  content_from?: string;
+}
+
+export interface BottleneckAnalysis {
+  high_dependency_steps: string[];
+  longest_chain_length: number;
+  independent_steps: number;
+}
+
+// Phase 6.2: Graph visualization
+export interface GraphStructure {
+  graph_id: string;
+  task_count: number;
+  task_ids: string[];
+  edges: GraphEdge[];
+}
+
+export interface GraphEdge {
+  from: string;
+  to: string;
+}
+
+// Phase 6.4: Settings Panel - Orchestrator Config
+export interface OrchestratorConfig {
+  gemini_timeout_secs: number;
+  gemini_model: string;
+  gemini_api_base_url: string;
+  max_goal_length: number;
+  plan_timeout_secs: number;
+  max_parallel_tasks: number;
 }
 
 // WebSocket message type

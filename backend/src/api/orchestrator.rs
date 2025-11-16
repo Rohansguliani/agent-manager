@@ -8,7 +8,14 @@
 //! to the frontend, allowing real-time feedback on multi-step operations.
 
 use crate::error::AppError;
+use crate::orchestrator::config::{
+    validate_and_apply_config_update, ConfigUpdateRequest, OrchestratorConfig,
+};
+use crate::orchestrator::constants::SSE_DONE_SIGNAL;
 use crate::orchestrator::graph_executor::execute_plan;
+use crate::orchestrator::plan_optimizer::{
+    analyze_bottlenecks, estimate_execution_time, estimate_token_usage, BottleneckAnalysis,
+};
 use crate::orchestrator::primitives::{
     internal_create_file, internal_run_gemini, internal_run_planner,
 };
@@ -26,6 +33,27 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// Helper function to serialize an OrchestrationEvent to JSON string
+///
+/// This centralizes event serialization with proper error handling.
+/// If serialization fails, it logs the error and returns a fallback JSON.
+///
+/// # Arguments
+/// * `event` - The orchestration event to serialize
+///
+/// # Returns
+/// * `String` - JSON string representation of the event (or fallback on error)
+fn serialize_event_or_fallback(event: &OrchestrationEvent) -> String {
+    serde_json::to_string(event).unwrap_or_else(|e| {
+        tracing::error!("Failed to serialize OrchestrationEvent: {} - Event: {:?}", e, event);
+        // Return a minimal error event as fallback
+        format!(
+            r#"{{"type": "serialization_error", "message": "Event serialization failed: {}", "status": "error"}}"#,
+            e
+        )
+    })
+}
 
 /// Helper function to format a stream into SSE (Server-Sent Events) format
 ///
@@ -63,6 +91,60 @@ pub struct OrchestrationStatus {
     pub status: String,
 }
 
+/// Phase 6.3: Structured orchestration events for live graph updates
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OrchestrationEvent {
+    /// Plan generated with analysis
+    PlanGenerated {
+        /// Number of steps in the plan
+        step_count: usize,
+        /// Estimated token usage for the plan
+        estimated_tokens: usize,
+        /// Estimated execution time in seconds
+        estimated_time_secs: usize,
+    },
+    /// Step started executing
+    StepStart {
+        /// Unique identifier for the step
+        step_id: String,
+        /// Sequential step number (1-indexed)
+        step_number: u32,
+        /// Task type being executed (e.g., "run_gemini", "create_file")
+        task: String,
+    },
+    /// Step completed successfully
+    StepComplete {
+        /// Unique identifier for the step
+        step_id: String,
+        /// Sequential step number (1-indexed)
+        step_number: u32,
+        /// Output from the step execution
+        output: String,
+    },
+    /// Step failed
+    StepError {
+        /// Unique identifier for the step
+        step_id: String,
+        /// Sequential step number (1-indexed)
+        step_number: u32,
+        /// Error message describing the failure
+        error: String,
+    },
+    /// All steps completed
+    ExecutionComplete {
+        /// Total number of steps in the plan
+        total_steps: usize,
+        /// Number of steps that completed successfully
+        successful_steps: usize,
+    },
+    /// Execution failed
+    ExecutionError {
+        /// Error message describing the failure
+        error: String,
+    },
+}
+
 /// POST /api/orchestrate/poem - Hard-coded orchestrator example
 ///
 /// Creates a poem using Gemini and saves it to a file.
@@ -85,15 +167,15 @@ pub async fn orchestrate_poem(
     State(state): State<Arc<RwLock<AppState>>>,
     Json(request): Json<OrchestrationRequest>,
 ) -> Result<Response, AppError> {
-    const MAX_GOAL_LENGTH: usize = 10000; // 10KB
+    let config = OrchestratorConfig::default();
 
     // Validate input size
-    if request.goal.len() > MAX_GOAL_LENGTH {
+    if request.goal.len() > config.max_goal_length {
         return Err(AppError::Internal(anyhow::anyhow!(
             "Goal too long ({} > {} characters). Maximum allowed length is {} characters.",
             request.goal.len(),
-            MAX_GOAL_LENGTH,
-            MAX_GOAL_LENGTH
+            config.max_goal_length,
+            config.max_goal_length
         )));
     }
 
@@ -155,7 +237,8 @@ pub async fn orchestrate_poem(
                             file_path
                         ));
                         // Signal stream completion
-                        yield Ok::<String, axum::Error>("[DONE]".to_string());
+                        use crate::orchestrator::constants::SSE_DONE_SIGNAL;
+                        yield Ok::<String, axum::Error>(SSE_DONE_SIGNAL.to_string());
                     }
                     Err(e) => {
                         // Error saving file
@@ -164,7 +247,8 @@ pub async fn orchestrate_poem(
                             e
                         ));
                         // Signal stream completion
-                        yield Ok::<String, axum::Error>("[DONE]".to_string());
+                        use crate::orchestrator::constants::SSE_DONE_SIGNAL;
+                        yield Ok::<String, axum::Error>(SSE_DONE_SIGNAL.to_string());
                     }
                 }
             }
@@ -175,7 +259,7 @@ pub async fn orchestrate_poem(
                     e
                 ));
                 // Signal stream completion
-                yield Ok::<String, axum::Error>("[DONE]".to_string());
+                yield Ok::<String, axum::Error>(SSE_DONE_SIGNAL.to_string());
             }
         }
     };
@@ -218,20 +302,33 @@ pub async fn orchestrate(
 ) -> Result<Response, AppError> {
     use async_stream::stream;
 
-    const MAX_GOAL_LENGTH: usize = 10000; // 10KB
+    let config = OrchestratorConfig::default();
 
     // Validate input size
-    if request.goal.len() > MAX_GOAL_LENGTH {
+    if request.goal.len() > config.max_goal_length {
         return Err(AppError::Internal(anyhow::anyhow!(
             "Goal too long ({} > {} characters). Maximum allowed length is {} characters.",
             request.goal.len(),
-            MAX_GOAL_LENGTH,
-            MAX_GOAL_LENGTH
+            config.max_goal_length,
+            config.max_goal_length
         )));
     }
 
     let state_clone = state.clone();
     let goal = request.goal;
+
+    // Create execution ID for tracing
+    let execution_id = uuid::Uuid::new_v4().to_string();
+    use crate::orchestrator::utils::hash_goal;
+    let goal_hash = hash_goal(&goal);
+
+    let span = tracing::info_span!(
+        "orchestrate",
+        execution_id = %execution_id,
+        goal_len = goal.len(),
+        goal_hash = %goal_hash,
+    );
+    let _enter = span.enter();
 
     let stream = stream! {
         // Step 1: Planning
@@ -240,68 +337,80 @@ pub async fn orchestrate(
                 .to_string(),
         );
 
-        // Generate plan using planner agent
-        let plan = match internal_run_planner(&goal).await {
+        // Generate plan using planner agent (via CLI)
+        let plan = match internal_run_planner(&state_clone, &goal).await {
             Ok(plan) => {
-                yield Ok::<String, axum::Error>(format!(
-                    r#"{{"step": 0, "step_id": "planning", "message": "Plan generated: {} steps", "status": "running"}}"#,
-                    plan.steps.len()
-                ));
+                // Phase 6.3: Emit structured event for plan generation
+                let plan_event = OrchestrationEvent::PlanGenerated {
+                    step_count: plan.steps.len(),
+                    estimated_tokens: crate::orchestrator::plan_optimizer::estimate_token_usage(&plan),
+                    estimated_time_secs: crate::orchestrator::plan_optimizer::estimate_execution_time(&plan),
+                };
+                yield Ok::<String, axum::Error>(serialize_event_or_fallback(&plan_event));
                 plan
             }
             Err(e) => {
-                yield Ok::<String, axum::Error>(format!(
-                    r#"{{"step": 0, "step_id": "planning", "message": "Planning failed: {}", "status": "error"}}"#,
-                    e
-                ));
-                yield Ok::<String, axum::Error>("[DONE]".to_string());
+                let error_event = OrchestrationEvent::ExecutionError {
+                    error: format!("Planning failed: {}", e),
+                };
+                yield Ok::<String, axum::Error>(serialize_event_or_fallback(&error_event));
+                yield Ok::<String, axum::Error>(SSE_DONE_SIGNAL.to_string());
                 return;
             }
         };
 
+        // Phase 6.3: Emit StepStart events for all steps (before execution)
+        // This gives the frontend a "map" of all steps that will run
+        for (idx, step) in plan.steps.iter().enumerate() {
+            let step_event = OrchestrationEvent::StepStart {
+                step_id: step.id.clone(),
+                step_number: (idx + 1) as u32,
+                task: step.task.clone(),
+            };
+            yield Ok::<String, axum::Error>(serialize_event_or_fallback(&step_event));
+        }
+
         // Step 2: Execution - stream events as steps execute
         // Note: execute_plan returns results after all steps complete,
         // but we can still stream completion events for each step
-        match execute_plan(plan.clone(), &state_clone).await {
+        match execute_plan(&plan, &state_clone).await {
             Ok(results) => {
-                // Stream results from each step with step_id
+                // Stream results from each step with structured events
                 for result in &results {
                     if result.success {
-                        yield Ok::<String, axum::Error>(format!(
-                            r#"{{"step": {}, "step_id": "{}", "message": "Step {} ({}) completed", "status": "running"}}"#,
-                            result.step_number,
-                            result.step_id,
-                            result.step_number,
-                            result.step_id
-                        ));
+                        let complete_event = OrchestrationEvent::StepComplete {
+                            step_id: result.step_id.clone(),
+                            step_number: result.step_number,
+                            output: result.output.clone().unwrap_or_default(),
+                        };
+                        yield Ok::<String, axum::Error>(serialize_event_or_fallback(&complete_event));
                     } else {
-                        yield Ok::<String, axum::Error>(format!(
-                            r#"{{"step": {}, "step_id": "{}", "message": "Step {} ({}) failed: {}", "status": "error"}}"#,
-                            result.step_number,
-                            result.step_id,
-                            result.step_number,
-                            result.step_id,
-                            result.error.as_deref().unwrap_or("Unknown error")
-                        ));
-                        yield Ok::<String, axum::Error>("[DONE]".to_string());
+                        let error_event = OrchestrationEvent::StepError {
+                            step_id: result.step_id.clone(),
+                            step_number: result.step_number,
+                            error: result.error.clone().unwrap_or_else(|| "Unknown error".to_string()),
+                        };
+                        yield Ok::<String, axum::Error>(serialize_event_or_fallback(&error_event));
+                        use crate::orchestrator::constants::SSE_DONE_SIGNAL;
+                        yield Ok::<String, axum::Error>(SSE_DONE_SIGNAL.to_string());
                         return;
                     }
                 }
 
                 // All steps completed successfully
-                yield Ok::<String, axum::Error>(format!(
-                    r#"{{"step": {}, "step_id": "completion", "message": "All {} steps completed successfully!", "status": "completed"}}"#,
-                    results.len(),
-                    results.len()
-                ));
-                yield Ok::<String, axum::Error>("[DONE]".to_string());
+                let complete_event = OrchestrationEvent::ExecutionComplete {
+                    total_steps: results.len(),
+                    successful_steps: results.iter().filter(|r| r.success).count(),
+                };
+                yield Ok::<String, axum::Error>(serialize_event_or_fallback(&complete_event));
+                yield Ok::<String, axum::Error>(SSE_DONE_SIGNAL.to_string());
             }
             Err(e) => {
-                yield Ok::<String, axum::Error>(format!(
-                    r#"{{"step": 0, "step_id": "execution_error", "message": "Execution failed: {}", "status": "error"}}"#,
-                    e
-                ));
-                yield Ok::<String, axum::Error>("[DONE]".to_string());
+                let error_event = OrchestrationEvent::ExecutionError {
+                    error: format!("Execution failed: {}", e),
+                };
+                yield Ok::<String, axum::Error>(serialize_event_or_fallback(&error_event));
+                yield Ok::<String, axum::Error>(SSE_DONE_SIGNAL.to_string());
             }
         }
     };
@@ -316,6 +425,95 @@ pub async fn orchestrate(
         .header(header::CONNECTION, "keep-alive")
         .body(Body::from_stream(sse_stream))
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to build response: {}", e)))
+}
+
+/// Plan analysis response (Phase 6.1: Pre-flight Check)
+#[derive(Debug, Serialize)]
+pub struct PlanAnalysisResponse {
+    /// The generated plan
+    pub plan: crate::orchestrator::plan_types::Plan,
+    /// Estimated token usage
+    pub estimated_tokens: usize,
+    /// Estimated execution time in seconds
+    pub estimated_time_secs: usize,
+    /// Bottleneck analysis
+    pub bottlenecks: BottleneckAnalysis,
+}
+
+/// POST /api/plan - Pre-flight check: Plan + Optimizer (Phase 6.1)
+///
+/// This endpoint generates a plan and runs optimization analysis
+/// WITHOUT executing it. This allows users to see cost/time estimates
+/// and bottlenecks before committing to execution.
+///
+/// # Flow
+/// 1. Call planner agent to generate a JSON plan
+/// 2. Run optimizer functions (token usage, execution time, bottlenecks)
+/// 3. Return plan + analysis (NO execution)
+///
+/// # Arguments
+/// * `State(state)` - Application state
+/// * `Json(request)` - Orchestration request with goal
+///
+/// # Returns
+/// * `Ok(Json<PlanAnalysisResponse>)` - Plan + analysis
+/// * `Err(AppError)` - If planning fails
+pub async fn plan_with_analysis(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Json(request): Json<OrchestrationRequest>,
+) -> Result<Json<PlanAnalysisResponse>, AppError> {
+    let config = OrchestratorConfig::default();
+
+    // Validate input size
+    if request.goal.len() > config.max_goal_length {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Goal too long ({} > {} characters). Maximum allowed length is {} characters.",
+            request.goal.len(),
+            config.max_goal_length,
+            config.max_goal_length
+        )));
+    }
+
+    // Generate plan using planner agent (via CLI)
+    let plan = internal_run_planner(&state, &request.goal).await?;
+
+    // Run optimizer functions
+    let estimated_tokens = estimate_token_usage(&plan);
+    let estimated_time_secs = estimate_execution_time(&plan);
+    let bottlenecks = analyze_bottlenecks(&plan);
+
+    Ok(Json(PlanAnalysisResponse {
+        plan,
+        estimated_tokens,
+        estimated_time_secs,
+        bottlenecks,
+    }))
+}
+
+/// Phase 6.4: Settings Panel - Get current config
+/// GET /api/config
+pub async fn get_config() -> Json<OrchestratorConfig> {
+    Json(OrchestratorConfig::default())
+}
+
+/// Phase 6.4: Settings Panel - Update config
+/// POST /api/config
+///
+/// Note: This updates the default config. For a production system,
+/// config should be persisted (e.g., in a database or config file).
+pub async fn update_config(
+    Json(request): Json<ConfigUpdateRequest>,
+) -> Result<Json<OrchestratorConfig>, AppError> {
+    let config = OrchestratorConfig::default();
+
+    // Validate and apply updates using the helper function
+    let updated_config = validate_and_apply_config_update(config, request)?;
+
+    // TODO: Persist config to database or config file
+    // For now, this just validates and returns the updated config
+    // The actual OrchestratorConfig::default() is still used in other endpoints
+
+    Ok(Json(updated_config))
 }
 
 #[cfg(test)]
@@ -395,5 +593,135 @@ mod tests {
         assert!(json_str.contains("\"step\":1"));
         assert!(json_str.contains("\"message\":\"Test message\""));
         assert!(json_str.contains("\"status\":\"running\""));
+    }
+
+    // ============================================================================
+    // Config Endpoint Tests (Phase 6.4)
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_get_config() {
+        // Test that get_config returns the default config
+        let response = get_config().await;
+        let config = response.0;
+
+        // Verify default values
+        assert_eq!(config.gemini_model, "gemini-2.5-flash");
+        assert_eq!(config.max_goal_length, 10000);
+        assert_eq!(config.plan_timeout_secs, 300);
+        assert_eq!(config.max_parallel_tasks, 10);
+    }
+
+    #[tokio::test]
+    async fn test_update_config_valid() {
+        // Test updating config with valid values
+        use crate::orchestrator::config::ConfigUpdateRequest;
+        let request = ConfigUpdateRequest {
+            max_parallel_tasks: Some(5),
+            gemini_model: Some("gemini-2.0-flash".to_string()),
+            max_goal_length: Some(5000),
+            plan_timeout_secs: Some(600),
+        };
+
+        let result = update_config(Json(request)).await;
+        assert!(result.is_ok());
+        let config = result.unwrap().0;
+
+        // Verify updated values
+        assert_eq!(config.max_parallel_tasks, 5);
+        assert_eq!(config.gemini_model, "gemini-2.0-flash");
+        assert_eq!(config.max_goal_length, 5000);
+        assert_eq!(config.plan_timeout_secs, 600);
+    }
+
+    #[tokio::test]
+    async fn test_update_config_partial() {
+        // Test updating config with partial values (some fields None)
+        use crate::orchestrator::config::ConfigUpdateRequest;
+        let request = ConfigUpdateRequest {
+            max_parallel_tasks: Some(20),
+            gemini_model: None,
+            max_goal_length: None,
+            plan_timeout_secs: None,
+        };
+
+        let result = update_config(Json(request)).await;
+        assert!(result.is_ok());
+        let config = result.unwrap().0;
+
+        // Verify only max_parallel_tasks was updated
+        assert_eq!(config.max_parallel_tasks, 20);
+        // Other fields should retain default values
+        assert_eq!(config.gemini_model, "gemini-2.5-flash");
+        assert_eq!(config.max_goal_length, 10000);
+        assert_eq!(config.plan_timeout_secs, 300);
+    }
+
+    #[tokio::test]
+    async fn test_update_config_invalid_max_parallel_zero() {
+        // Test that max_parallel_tasks = 0 is rejected
+        use crate::orchestrator::config::ConfigUpdateRequest;
+        let request = ConfigUpdateRequest {
+            max_parallel_tasks: Some(0),
+            gemini_model: None,
+            max_goal_length: None,
+            plan_timeout_secs: None,
+        };
+
+        let result = update_config(Json(request)).await;
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("max_parallel_tasks must be > 0"));
+    }
+
+    #[tokio::test]
+    async fn test_update_config_invalid_empty_model() {
+        // Test that empty gemini_model is rejected
+        use crate::orchestrator::config::ConfigUpdateRequest;
+        let request = ConfigUpdateRequest {
+            max_parallel_tasks: None,
+            gemini_model: Some(String::new()),
+            max_goal_length: None,
+            plan_timeout_secs: None,
+        };
+
+        let result = update_config(Json(request)).await;
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("gemini_model cannot be empty"));
+    }
+
+    #[tokio::test]
+    async fn test_update_config_invalid_max_goal_zero() {
+        // Test that max_goal_length = 0 is rejected
+        use crate::orchestrator::config::ConfigUpdateRequest;
+        let request = ConfigUpdateRequest {
+            max_parallel_tasks: None,
+            gemini_model: None,
+            max_goal_length: Some(0),
+            plan_timeout_secs: None,
+        };
+
+        let result = update_config(Json(request)).await;
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("max_goal_length must be > 0"));
+    }
+
+    #[tokio::test]
+    async fn test_update_config_invalid_timeout_zero() {
+        // Test that plan_timeout_secs = 0 is rejected
+        use crate::orchestrator::config::ConfigUpdateRequest;
+        let request = ConfigUpdateRequest {
+            max_parallel_tasks: None,
+            gemini_model: None,
+            max_goal_length: None,
+            plan_timeout_secs: Some(0),
+        };
+
+        let result = update_config(Json(request)).await;
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("plan_timeout_secs must be > 0"));
     }
 }

@@ -23,14 +23,18 @@ use tokio::sync::RwLock;
 /// Query request
 #[derive(Deserialize)]
 pub struct QueryRequest {
+    /// The query string to execute
     pub query: String,
 }
 
 /// Query response
 #[derive(Debug, Serialize)]
 pub struct QueryResponse {
+    /// The response from the agent
     pub response: String,
+    /// ID of the agent that executed the query
     pub agent_id: AgentId,
+    /// Execution time in milliseconds
     pub execution_time_ms: u64,
 }
 

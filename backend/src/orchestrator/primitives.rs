@@ -8,7 +8,7 @@
 //! - Testable: Each primitive can be tested independently
 //! - Composable: Easy to chain together in orchestration logic
 
-use crate::api::utils::find_or_create_gemini_agent;
+use crate::api::utils::{find_or_create_gemini_agent, find_or_create_planner_agent};
 use crate::error::AppError;
 use crate::executor::CliExecutor;
 use crate::orchestrator::api_client;
@@ -18,6 +18,9 @@ use crate::state::AppState;
 use anyhow::anyhow;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// Type alias for planner results
+pub type PlannerResult = Result<Plan, AppError>;
 
 /// Run Gemini agent with a prompt and return the full result (non-streaming)
 ///
@@ -38,8 +41,9 @@ use tokio::sync::RwLock;
 /// ```no_run
 /// use std::sync::Arc;
 /// use tokio::sync::RwLock;
-/// # async fn example() -> Result<(), crate::error::AppError> {
-/// # let state = Arc::new(RwLock::new(crate::state::AppState::new()));
+/// use agent_manager_backend::{error::AppError, orchestrator::primitives::internal_run_gemini, state::AppState};
+/// # async fn example() -> Result<(), AppError> {
+/// # let state = Arc::new(RwLock::new(AppState::new()));
 /// let poem = internal_run_gemini(&state, "create a 4-line poem about Rust").await?;
 /// # Ok(())
 /// # }
@@ -77,7 +81,8 @@ pub async fn internal_run_gemini(
 ///
 /// # Example
 /// ```no_run
-/// # async fn example() -> Result<(), crate::error::AppError> {
+/// use agent_manager_backend::{error::AppError, orchestrator::primitives::internal_create_file};
+/// # async fn example() -> Result<(), AppError> {
 /// let file_path = internal_create_file(
 ///     "poem.txt",
 ///     "Here is my poem...",
@@ -113,15 +118,20 @@ pub async fn internal_create_file(
 ///
 /// # Example
 /// ```no_run
-/// # async fn example() -> Result<(), crate::error::AppError> {
+/// use agent_manager_backend::{error::AppError, orchestrator::primitives::internal_run_gemini_api};
+/// use reqwest::Client;
+/// # async fn example() -> Result<(), AppError> {
+/// # let client = Client::new();
 /// // Regular prompt (unstructured output)
 /// let response = internal_run_gemini_api(
+///     &client,
 ///     "Write a haiku about programming",
 ///     false,
 /// ).await?;
 ///
 /// // Planner prompt (structured JSON output)
 /// let plan_json = internal_run_gemini_api(
+///     &client,
 ///     "Generate a JSON plan with steps",
 ///     true,  // Force JSON mode
 /// ).await?;
@@ -129,7 +139,11 @@ pub async fn internal_create_file(
 /// # }
 /// ```
 #[allow(dead_code)] // Will be used in Phase 1B/Phase 2 for planner agent
-pub async fn internal_run_gemini_api(prompt: &str, force_json: bool) -> Result<String, AppError> {
+pub async fn internal_run_gemini_api(
+    client: &reqwest::Client,
+    prompt: &str,
+    force_json: bool,
+) -> Result<String, AppError> {
     // Read API key from environment
     let api_key = match std::env::var("GEMINI_API_KEY") {
         Ok(key) if key.is_empty() => {
@@ -151,8 +165,8 @@ pub async fn internal_run_gemini_api(prompt: &str, force_json: bool) -> Result<S
         "Calling Gemini API directly (not via CLI)"
     );
 
-    // Call the API client
-    api_client::call_gemini_api(&api_key, prompt, None, force_json).await
+    // Call the API client with shared HTTP client
+    api_client::call_gemini_api(client, &api_key, prompt, None, force_json).await
 }
 
 /// Run the planner agent to generate a structured plan
@@ -174,23 +188,35 @@ pub async fn internal_run_gemini_api(prompt: &str, force_json: bool) -> Result<S
 ///
 /// # Example
 /// ```no_run
-/// # async fn example() -> Result<(), crate::error::AppError> {
-/// let plan = internal_run_planner("Write a poem about Rust and save it to poem.txt").await?;
+/// use agent_manager_backend::{error::AppError, orchestrator::primitives::internal_run_planner, state::AppState};
+/// use std::sync::Arc;
+/// use tokio::sync::RwLock;
+/// # async fn example() -> Result<(), AppError> {
+/// # let state = Arc::new(RwLock::new(AppState::new()));
+/// let plan = internal_run_planner(&state, "Write a poem about Rust and save it to poem.txt").await?;
 /// // plan.steps contains the steps to execute
 /// # Ok(())
 /// # }
 /// ```
-pub async fn internal_run_planner(goal: &str) -> Result<Plan, AppError> {
+pub async fn internal_run_planner(state: &Arc<RwLock<AppState>>, goal: &str) -> PlannerResult {
+    // Create structured logging span for planner execution
+    use crate::orchestrator::utils::hash_goal;
+    let goal_hash = hash_goal(goal);
+
+    let span = tracing::info_span!(
+        "internal_run_planner",
+        goal_len = goal.len(),
+        goal_hash = %goal_hash,
+    );
+    let _enter = span.enter();
+
     // Build the meta-prompt
     let meta_prompt = build_meta_prompt(goal);
 
-    tracing::debug!(
-        goal_len = goal.len(),
-        "Calling planner agent to generate plan"
-    );
+    tracing::debug!("Calling planner agent to generate plan via CLI");
 
     // Try planning (with one retry on failure)
-    let plan_result = try_plan_once(&meta_prompt).await;
+    let plan_result = try_plan_once(state, &meta_prompt).await;
 
     match plan_result {
         Ok(plan) => {
@@ -208,7 +234,7 @@ pub async fn internal_run_planner(goal: &str) -> Result<Plan, AppError> {
             );
 
             // Retry once with the same prompt
-            let retry_result = try_plan_once(&meta_prompt).await;
+            let retry_result = try_plan_once(state, &meta_prompt).await;
 
             match retry_result {
                 Ok(plan) => {
@@ -232,20 +258,30 @@ pub async fn internal_run_planner(goal: &str) -> Result<Plan, AppError> {
 }
 
 /// Attempt to generate a plan once
-async fn try_plan_once(meta_prompt: &str) -> Result<Plan, AppError> {
-    // Call Gemini API with JSON mode
-    let json_response = internal_run_gemini_api(meta_prompt, true).await?;
+async fn try_plan_once(state: &Arc<RwLock<AppState>>, meta_prompt: &str) -> PlannerResult {
+    // Use planner-specific agent (with JSON output flag)
+    let agent = find_or_create_planner_agent(state).await;
+
+    // Create executor with 30 second timeout
+    let executor = crate::executor::cli::CliExecutor::new(30);
+
+    // Execute planner prompt and get JSON response
+    let json_response = executor
+        .execute(&agent, meta_prompt)
+        .await
+        .map_err(AppError::ExecutionError)?;
 
     tracing::debug!(
         response_len = json_response.len(),
-        "Received JSON response from planner"
+        "Received JSON response from planner via CLI"
     );
 
     // Parse JSON to Plan struct
     let plan: Plan = serde_json::from_str(&json_response).map_err(|e| {
         AppError::InvalidPlan(format!(
-            "Failed to parse planner response as JSON: {} - Response: {}",
-            e, json_response
+            "Failed to parse planner response as JSON: {} - Response (first 500 chars): {}",
+            e,
+            json_response.chars().take(500).collect::<String>()
         ))
     })?;
 
@@ -441,7 +477,9 @@ mod tests {
         // Remove env var
         std::env::remove_var("GEMINI_API_KEY");
 
-        let result = internal_run_gemini_api("test prompt", false).await;
+        // Create test HTTP client
+        let client = reqwest::Client::new();
+        let result = internal_run_gemini_api(&client, "test prompt", false).await;
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -468,7 +506,9 @@ mod tests {
         // Set empty API key
         std::env::set_var("GEMINI_API_KEY", "");
 
-        let result = internal_run_gemini_api("test prompt", false).await;
+        // Create test HTTP client
+        let client = reqwest::Client::new();
+        let result = internal_run_gemini_api(&client, "test prompt", false).await;
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -508,7 +548,9 @@ mod tests {
             }
 
             let goal = "Write a 4-line poem about dogs and save it to dogs.txt";
-            let result = internal_run_planner(goal).await;
+            // Create test state
+            let state = create_test_state();
+            let result = internal_run_planner(&state, goal).await;
 
             match result {
                 Ok(plan) => {
@@ -542,7 +584,9 @@ mod tests {
                 return;
             }
 
-            let result = internal_run_planner("").await;
+            // Create test state
+            let state = create_test_state();
+            let result = internal_run_planner(&state, "").await;
             // Empty goal might still generate a plan or might fail
             // Either is acceptable - we're just testing it doesn't panic
             if result.is_ok() || result.is_err() {

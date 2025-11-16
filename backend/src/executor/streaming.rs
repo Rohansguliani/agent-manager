@@ -44,8 +44,17 @@ impl StreamingCliExecutor {
         // Build the command from agent configuration
         let mut cmd = Command::new(&agent.config.command);
 
-        // Add query as argument
-        cmd.arg(query);
+        // Add query: use `-p` flag for Gemini CLI, positional argument for others
+        match agent.agent_type {
+            crate::state::AgentType::Gemini => {
+                // Gemini CLI requires `-p` flag for the prompt
+                cmd.arg("-p").arg(query);
+            }
+            _ => {
+                // Other CLI tools accept query as first positional argument
+                cmd.arg(query);
+            }
+        }
 
         // Add any additional arguments from agent config
         for arg in &agent.config.args {

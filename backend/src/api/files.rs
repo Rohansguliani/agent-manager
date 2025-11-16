@@ -21,19 +21,23 @@ pub use crate::services::files::FileInfo;
 /// Response for listing files
 #[derive(Debug, Serialize)]
 pub struct ListFilesResponse {
+    /// List of files and directories in the path
     pub files: Vec<FileInfo>,
+    /// Absolute path that was listed
     pub path: String,
 }
 
 /// Request to set working directory
 #[derive(Deserialize)]
 pub struct SetWorkingDirectoryRequest {
+    /// Path to set as working directory (None to clear)
     pub path: Option<String>,
 }
 
 /// Response for working directory
 #[derive(Debug, Serialize)]
 pub struct WorkingDirectoryResponse {
+    /// Current working directory path (None if not set)
     pub path: Option<String>,
 }
 

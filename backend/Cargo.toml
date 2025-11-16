@@ -26,7 +26,7 @@ futures-util = { version = "0.3", features = ["sink"] }
 async-stream = "0.3"
 reqwest = { version = "0.11", features = ["json"] }
 async-trait = "0.1"
-graph-flow = { path = "../../rs-graph-llm/graph-flow" }  # GraphFlow-rs for parallel DAG execution (Phase 4F)
+graph-flow = { git = "https://github.com/a-agmon/rs-graph-llm", package = "graph-flow" }  # GraphFlow-rs for parallel DAG execution (Phase 4F)
 
 [dev-dependencies]
 tempfile = "3.0"

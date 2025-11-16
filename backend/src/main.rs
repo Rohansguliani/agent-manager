@@ -127,6 +127,18 @@ async fn main() -> anyhow::Result<()> {
             post(api::orchestrator::orchestrate_poem),
         )
         .route("/api/orchestrate", post(api::orchestrator::orchestrate))
+        // Phase 6.1: Pre-flight check - Plan + Optimizer
+        .route("/api/plan", post(api::orchestrator::plan_with_analysis))
+        // Phase 6.2: Graph visualization
+        .route(
+            "/api/orchestrate/graph",
+            get(api::orchestrator_graph::get_graph_structure),
+        )
+        // Phase 6.4: Settings Panel
+        .route(
+            "/api/config",
+            get(api::orchestrator::get_config).post(api::orchestrator::update_config),
+        )
         // WebSocket for real-time updates
         .route("/ws", get(websocket::websocket_handler))
         // Middleware (order matters - request_id should be first)

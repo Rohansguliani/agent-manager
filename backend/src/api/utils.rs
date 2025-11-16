@@ -77,7 +77,29 @@ pub fn create_executor(config: Option<&Config>) -> CliExecutor {
     CliExecutor::new(timeout)
 }
 
-/// Find or create a Gemini agent
+/// Find or create a Gemini agent specifically for the planner (with JSON output)
+///
+/// The planner requires JSON output format, which is different from regular Gemini tasks
+/// that return plain text. This function creates an agent with `--output-format json` flag.
+///
+/// # Arguments
+/// * `state` - Application state
+///
+/// # Returns
+/// * `Agent` - Gemini agent configured for planner use (JSON output)
+pub async fn find_or_create_planner_agent(state: &Arc<RwLock<AppState>>) -> Agent {
+    let mut agent = find_or_create_gemini_agent(state).await;
+
+    // Add JSON output flag for planner (only if not already present)
+    if !agent.config.args.iter().any(|arg| arg == "--output-format") {
+        agent.config.args.push("--output-format".to_string());
+        agent.config.args.push("json".to_string());
+    }
+
+    agent
+}
+
+/// Find or create a Gemini agent for general use (plain text output)
 ///
 /// # Arguments
 /// * `state` - Application state

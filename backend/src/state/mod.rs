@@ -1,5 +1,6 @@
-// State management module
-// Handles application state, agent registry, and persistence
+//! State management module
+//!
+//! Handles application state, agent registry, working directory context, and persistence.
 
 pub mod app_state;
 pub mod config;

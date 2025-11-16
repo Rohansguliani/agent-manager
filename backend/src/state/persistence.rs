@@ -12,10 +12,13 @@ use thiserror::Error;
 /// Error types for persistence operations
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum PersistenceError {
+    /// I/O error occurred (e.g., file not found, permission denied)
     #[error("IO Error: {0}")]
     IoError(String),
+    /// JSON serialization/deserialization error
     #[error("JSON Error: {0}")]
     JsonError(String),
+    /// Data validation error (e.g., unsupported version)
     #[error("Invalid Data: {0}")]
     InvalidData(String),
 }

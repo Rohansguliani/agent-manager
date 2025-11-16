@@ -103,7 +103,9 @@ impl AgentConfig {
 
                 Self {
                     command: gemini_path,
-                    args: vec!["--yolo".to_string()], // Auto-approve all actions (no prompts)
+                    args: vec![
+                        "--yolo".to_string(), // Auto-approve all actions (no prompts)
+                    ],
                     env_vars: HashMap::new(),
                     working_dir: None,
                     options: HashMap::new(),
@@ -173,7 +175,10 @@ mod tests {
             "Command should be 'gemini' or end with '/gemini', got: {}",
             gemini_config.command
         );
-        assert_eq!(gemini_config.args, vec!["--yolo"]);
+        assert_eq!(
+            gemini_config.args,
+            vec!["--yolo".to_string()] // JSON flag removed - only planner uses it
+        );
 
         let claude_config = AgentConfig::for_type(&AgentType::ClaudeCode);
         assert_eq!(claude_config.command, "claude");

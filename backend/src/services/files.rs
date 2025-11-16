@@ -13,11 +13,16 @@ use tracing::warn;
 /// File or directory information
 #[derive(Debug, Serialize, Clone)]
 pub struct FileInfo {
+    /// Name of the file or directory
     pub name: String,
+    /// Full path to the file or directory
     pub path: String,
+    /// Whether this entry is a directory
     pub is_directory: bool,
+    /// File size in bytes (None for directories)
     pub size: Option<u64>,
-    pub modified: Option<u64>, // Unix timestamp
+    /// Last modification time as Unix timestamp (seconds since epoch)
+    pub modified: Option<u64>,
 }
 
 /// File system service
