@@ -16,6 +16,7 @@ use crate::orchestrator::plan_types::Plan;
 use crate::services::files::FileService;
 use crate::state::AppState;
 use anyhow::anyhow;
+use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -25,16 +26,29 @@ pub type PlannerResult = Result<Plan, AppError>;
 /// Run Gemini agent with a prompt and return the full result (non-streaming)
 ///
 /// This is a wrapper around `CliExecutor` that:
-/// - Finds or creates a Gemini agent with proper context
+/// - Finds or creates a Gemini agent with proper context (now with JSON output format)
 /// - Executes the query non-streaming (waits for full result)
+/// - Parses the JSON response to extract the actual content from the "response" field
 /// - Returns the complete output as a String
+///
+/// With `--output-format json`, Gemini CLI returns structured JSON like:
+/// ```json
+/// {
+///   "response": "The actual content here...",
+///   "status": "success",
+///   ...
+/// }
+/// ```
+///
+/// This function extracts the "response" field, which contains the actual content
+/// (not status messages or tool execution logs that appear in stdout).
 ///
 /// # Arguments
 /// * `state` - Application state (for agent management)
 /// * `prompt` - The prompt to send to Gemini
 ///
 /// # Returns
-/// * `Ok(String)` - The full response from Gemini
+/// * `Ok(String)` - The full response from Gemini (extracted from JSON "response" field)
 /// * `Err(AppError)` - If execution failed
 ///
 /// # Example
@@ -53,16 +67,81 @@ pub async fn internal_run_gemini(
     prompt: &str,
 ) -> Result<String, AppError> {
     // Find or create Gemini agent (automatically applies working directory context)
+    // Now includes --output-format json for structured output
     let agent = find_or_create_gemini_agent(state).await;
 
     // Create executor with 30 second timeout
     let executor = CliExecutor::new(30);
 
     // Execute and wait for full result (non-streaming)
-    executor
+    let raw_output = executor
         .execute(&agent, prompt)
         .await
-        .map_err(AppError::ExecutionError)
+        .map_err(AppError::ExecutionError)?;
+
+    // Parse JSON response and extract the "response" field
+    // This separates the actual content from status messages/logs
+    parse_gemini_json_response(&raw_output).map_err(|e| {
+        AppError::ExecutionError(crate::executor::error::ExecutionError::InvalidEncoding(
+            format!(
+                "Failed to parse Gemini JSON response: {} - Response (first 500 chars): {}",
+                e,
+                raw_output.chars().take(500).collect::<String>()
+            ),
+        ))
+    })
+}
+
+/// Parse Gemini CLI JSON response and extract the actual content
+///
+/// Gemini CLI with `--output-format json` returns a JSON object like:
+/// ```json
+/// {
+///   "response": "The actual content here...",
+///   "status": "success",
+///   ...
+/// }
+/// ```
+///
+/// This function extracts the "response" field, which contains the actual content
+/// (not status messages or tool execution logs that appear when Gemini CLI acts as an Agent).
+///
+/// # Arguments
+/// * `response` - Raw JSON response string from Gemini CLI
+///
+/// # Returns
+/// * `Result<String, serde_json::Error>` - Extracted response content or parsing error
+fn parse_gemini_json_response(response: &str) -> Result<String, serde_json::Error> {
+    // First, try to parse as a JSON object with a "response" field
+    #[derive(Deserialize)]
+    struct GeminiResponse {
+        response: Option<String>,
+    }
+
+    match serde_json::from_str::<GeminiResponse>(response) {
+        Ok(parsed) => {
+            // Extract the response field (the actual content)
+            if let Some(content) = parsed.response {
+                Ok(content)
+            } else {
+                // If no "response" field, fall back to raw response
+                // (handle edge cases where structure might differ)
+                Ok(response.trim().to_string())
+            }
+        }
+        Err(_) => {
+            // If parsing as GeminiResponse fails, try parsing as plain JSON string
+            // (some versions might return just a JSON string)
+            match serde_json::from_str::<String>(response) {
+                Ok(content) => Ok(content),
+                Err(_) => {
+                    // If all JSON parsing fails, return the raw response as-is
+                    // (fallback for non-JSON output - should not happen with --output-format json)
+                    Ok(response.to_string())
+                }
+            }
+        }
+    }
 }
 
 /// Create or write a file with the given content
@@ -277,7 +356,9 @@ async fn try_plan_once(state: &Arc<RwLock<AppState>>, meta_prompt: &str) -> Plan
     );
 
     // Parse JSON to Plan struct
-    let plan: Plan = serde_json::from_str(&json_response).map_err(|e| {
+    // Gemini CLI with --output-format json may return a wrapped response with the Plan JSON
+    // inside a "response" field as a markdown code block. Handle both formats.
+    let plan: Plan = parse_planner_response(&json_response).map_err(|e| {
         AppError::InvalidPlan(format!(
             "Failed to parse planner response as JSON: {} - Response (first 500 chars): {}",
             e,
@@ -291,6 +372,84 @@ async fn try_plan_once(state: &Arc<RwLock<AppState>>, meta_prompt: &str) -> Plan
     })?;
 
     Ok(plan)
+}
+
+/// Parse planner response from Gemini CLI
+///
+/// Handles two response formats:
+/// 1. Direct Plan JSON: `{"version": "1.0", "steps": [...]}`
+/// 2. Wrapped response with markdown code block: `{"response": "```json\n{...}\n```"}`
+///
+/// # Arguments
+/// * `response` - Raw JSON response string from Gemini CLI
+///
+/// # Returns
+/// * `Result<Plan, serde_json::Error>` - Parsed Plan struct or parsing error
+fn parse_planner_response(response: &str) -> Result<Plan, serde_json::Error> {
+    // First, try to parse directly as Plan (in case Gemini CLI returns raw Plan JSON)
+    if let Ok(plan) = serde_json::from_str::<Plan>(response) {
+        return Ok(plan);
+    }
+
+    // If direct parsing fails, try to parse as wrapped response
+    #[derive(Deserialize)]
+    struct WrappedResponse {
+        response: Option<String>,
+    }
+
+    let wrapped: WrappedResponse = serde_json::from_str(response)?;
+
+    // Extract the response field (the Plan JSON is inside a markdown code block)
+    let response_content = wrapped.response.ok_or_else(|| {
+        // Create a JSON syntax error to indicate missing field
+        serde_json::from_str::<serde_json::Value>("{").unwrap_err()
+    })?;
+
+    // Extract JSON from markdown code block
+    // Pattern: ```json\n{...}\n``` or ```json{...}``` or ```{...}``` or just {...}
+    let mut json_content = response_content.trim();
+
+    // Remove opening markdown code block fence (```json or ```)
+    if json_content.starts_with("```json") {
+        json_content = json_content
+            .strip_prefix("```json")
+            .unwrap_or(json_content)
+            .trim_start();
+    } else if json_content.starts_with("```") {
+        json_content = json_content
+            .strip_prefix("```")
+            .unwrap_or(json_content)
+            .trim_start();
+        // Remove "json" if present after backticks (handle ```json separately or ``` json)
+        if json_content.starts_with("json") {
+            json_content = json_content
+                .strip_prefix("json")
+                .unwrap_or(json_content)
+                .trim_start();
+        }
+    }
+
+    // Remove leading newline if present
+    json_content = json_content.strip_prefix('\n').unwrap_or(json_content);
+
+    // Remove closing markdown code block fence (```)
+    let json_content = json_content.trim_end();
+    let json_content = if json_content.ends_with("```") {
+        let without_close = json_content
+            .strip_suffix("```")
+            .unwrap_or(json_content)
+            .trim_end();
+        // Remove trailing newline if present before ```
+        without_close
+            .strip_suffix('\n')
+            .unwrap_or(without_close)
+            .trim_end()
+    } else {
+        json_content
+    };
+
+    // Parse the extracted JSON as Plan
+    serde_json::from_str(json_content)
 }
 
 /// Build the meta-prompt for the planner agent

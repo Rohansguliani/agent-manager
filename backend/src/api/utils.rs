@@ -99,13 +99,16 @@ pub async fn find_or_create_planner_agent(state: &Arc<RwLock<AppState>>) -> Agen
     agent
 }
 
-/// Find or create a Gemini agent for general use (plain text output)
+/// Find or create a Gemini agent for general use (with JSON output format)
+///
+/// Regular Gemini tasks now use `--output-format json` to ensure we get structured output
+/// with the actual content in the "response" field, not status messages in stdout.
 ///
 /// # Arguments
 /// * `state` - Application state
 ///
 /// # Returns
-/// * `Agent` - Gemini agent (existing or newly created)
+/// * `Agent` - Gemini agent (existing or newly created) with JSON output format
 pub async fn find_or_create_gemini_agent(state: &Arc<RwLock<AppState>>) -> Agent {
     let state_read = state.read().await;
     // Try to find a Gemini agent
@@ -129,6 +132,16 @@ pub async fn find_or_create_gemini_agent(state: &Arc<RwLock<AppState>>) -> Agent
                 "Applied working directory context to existing agent"
             );
         }
+
+        // For regular Gemini tasks, we want pipe behavior (output content) not agent behavior (write files)
+        // Remove --yolo flag (which makes Gemini act as an agent) and add --output-format json
+        // This ensures the "response" field contains the actual content, not status messages
+        agent.config.args.retain(|arg| arg != "--yolo");
+        if !agent.config.args.iter().any(|arg| arg == "--output-format") {
+            agent.config.args.push("--output-format".to_string());
+            agent.config.args.push("json".to_string());
+        }
+
         agent
     } else {
         // Auto-create a Gemini agent if none exists
@@ -141,6 +154,16 @@ pub async fn find_or_create_gemini_agent(state: &Arc<RwLock<AppState>>) -> Agent
         );
         // Apply working directory context
         apply_working_directory_context(&mut agent, &state_write);
+
+        // For regular Gemini tasks, we want pipe behavior (output content) not agent behavior (write files)
+        // Remove --yolo flag (which makes Gemini act as an agent) and add --output-format json
+        // This ensures the "response" field contains the actual content, not status messages
+        agent.config.args.retain(|arg| arg != "--yolo");
+        if !agent.config.args.iter().any(|arg| arg == "--output-format") {
+            agent.config.args.push("--output-format".to_string());
+            agent.config.args.push("json".to_string());
+        }
+
         tracing::debug!(
             agent_id = %agent.id,
             working_dir = ?agent.config.working_dir,

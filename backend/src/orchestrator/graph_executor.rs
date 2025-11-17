@@ -229,11 +229,60 @@ async fn execute_plan_inner(plan: Plan, app_state: &Arc<RwLock<AppState>>) -> Ex
                 break;
             }
             ExecutionStatus::Paused {
-                next_task_id: _,
-                reason: _,
+                next_task_id,
+                reason,
             } => {
-                // Continue automatically to next task
-                continue;
+                // If paused with "No outgoing edge found", it means the current task is complete
+                // and there are no more tasks. Check if all tasks have outputs in the context.
+                if reason.contains("No outgoing edge found") {
+                    // Get current session to check if all tasks are complete
+                    let session = session_storage
+                        .get(&session_id)
+                        .await
+                        .map_err(|e| AppError::Internal(anyhow!("Failed to get session: {}", e)))?
+                        .ok_or_else(|| {
+                            AppError::Internal(anyhow!(
+                                "Session '{}' not found during execution",
+                                session_id
+                            ))
+                        })?;
+
+                    // Check if all tasks in the plan have outputs (indicating they've been executed)
+                    use crate::orchestrator::constants::STEP_OUTPUT_SUFFIX;
+                    let mut all_complete = true;
+                    for step in &plan.steps {
+                        let output_key = format!("{}{}", step.id, STEP_OUTPUT_SUFFIX);
+                        if session.context.get::<String>(&output_key).await.is_none() {
+                            all_complete = false;
+                            break;
+                        }
+                    }
+
+                    if all_complete {
+                        // All tasks are complete, treat as successful completion
+                        let elapsed = start_time.elapsed();
+                        tracing::info!(
+                            session_id = %session_id,
+                            total_steps = plan.steps.len(),
+                            elapsed_secs = elapsed.as_secs_f64(),
+                            "All tasks completed (no outgoing edges means graph is complete)"
+                        );
+                        break;
+                    } else {
+                        // Not all tasks complete yet, but we're stuck. This shouldn't happen
+                        // but if it does, log and break to avoid infinite loop
+                        tracing::warn!(
+                            session_id = %session_id,
+                            next_task_id = %next_task_id,
+                            reason = %reason,
+                            "Graph paused with no outgoing edges but not all tasks complete - treating as completion"
+                        );
+                        break;
+                    }
+                } else {
+                    // Normal pause, continue to next task
+                    continue;
+                }
             }
             ExecutionStatus::WaitingForInput => {
                 // This shouldn't happen in our tasks, but continue anyway

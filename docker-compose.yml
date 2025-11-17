@@ -12,14 +12,18 @@ services:
       - cargo-build-cache:/app/target
       # Mount user's home directory so backend can access Mac laptop files (read-write)
       - ${HOME}:/host/home
+      # Mount Gemini CLI credentials from host to enable Google account free tier auth
+      # This allows using the 1,000 requests/day free tier instead of API key limits
+      # Credentials are stored in ~/.gemini/ after running 'gemini auth login' on host
+      - ${HOME}/.gemini:/root/.gemini
     environment:
       - RUST_LOG=debug
       - RUST_BACKTRACE=1
       - PORT=8080
       - HOST=0.0.0.0
-      # GEMINI_API_KEY is automatically loaded from .env file in this directory
-      # Docker Compose automatically reads .env files from the same directory
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # GEMINI_API_KEY is commented out to use Google account auth (free tier: 1,000/day)
+      # If you need to use API key instead, uncomment this line and comment out the .gemini volume mount above
+      # - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     networks:
       - app-network
     # Health check

@@ -1,0 +1,206 @@
+Graph-Flow Parallel Task Orchestration Implementation
+====================================================
+
+This document summarizes the implementation of parallel task orchestration using 
+the graph-flow library, replacing the previous sequential execution model.
+
+OVERVIEW
+--------
+
+The agent-manager-backend has been upgraded from sequential task execution to a 
+parallel, graph-based orchestration system using the `graph-flow` library. This 
+enables tasks to execute in parallel when dependencies allow, significantly 
+improving performance for multi-step plans.
+
+KEY CHANGES
+-----------
+
+1. Graph-Flow Integration
+   - Replaced custom sequential executor with graph-flow's FlowRunner
+   - Implemented graph-flow::Task trait for RunGeminiTask and CreateFileTask
+   - Added plan_to_graph.rs module to convert Plan structures into graph-flow Graphs
+   - Tasks now execute based on dependency graph, not sequential order
+
+2. Parallel Execution Support
+   - Tasks with no dependencies execute immediately
+   - Tasks execute in parallel when all dependencies are satisfied
+   - Maximum parallelism controlled by OrchestratorConfig.max_parallel_tasks
+
+3. Graph Executor Implementation
+   - Created graph_executor.rs to manage graph-flow execution lifecycle
+   - Handles task state, context propagation, and completion detection
+   - Fixed infinite loop issue when final task completes (was retrying completed tasks)
+
+4. Gemini CLI Integration & JSON Parsing
+   - Added --output-format json flag to both planner and regular Gemini agents
+   - Implemented parse_planner_response() to extract Plan JSON from wrapped CLI responses
+   - Implemented parse_gemini_json_response() to extract content from Gemini CLI JSON output
+   - Handles wrapped JSON responses with markdown code blocks (```json\n{...}\n```)
+
+5. Agent vs. Pipe Fix
+   - Removed --yolo flag from regular Gemini agent configuration
+   - Problem: --yolo makes Gemini CLI act as an "Agent" (employee) that writes files 
+     directly and outputs status messages to stdout
+   - Solution: Use --output-format json without --yolo for "Pipe" behavior (outputs 
+     content to stdout as JSON)
+   - Planner still uses --yolo if needed (only generates plans, doesn't write files)
+
+6. Authentication & Docker Configuration
+   - Configured ~/.gemini volume mount for sharing OAuth credentials between host and container
+   - Fixed authentication issues by ensuring settings.json and oauth_creds.json are properly 
+     mounted from host to container
+
+TECHNICAL DETAILS
+-----------------
+
+Dependency Management:
+- Switched graph-flow from local path dependency to git dependency:
+  graph-flow = { git = "https://github.com/a-agmon/rs-graph-llm", package = "graph-flow" }
+
+File Structure:
+- orchestrator/graph_executor.rs: Main graph execution coordinator
+- orchestrator/plan_to_graph.rs: Converts Plan -> graph-flow Graph
+- orchestrator/tasks.rs: Implements graph-flow::Task for RunGeminiTask and CreateFileTask
+- orchestrator/primitives.rs: 
+  - parse_planner_response(): Extracts Plan from wrapped JSON CLI response
+  - parse_gemini_json_response(): Extracts content from Gemini CLI JSON output
+  - internal_run_gemini(): Wrapper that parses JSON and extracts response field
+
+Graph-Flow Task Implementation:
+- RunGeminiTask: Executes Gemini CLI prompt, stores output in context
+- CreateFileTask: Reads content from context (via content_from parameter), writes to file
+- Both tasks implement graph-flow::Task trait with execute() method
+- Tasks store outputs in context using keys like "step_1.output" for downstream tasks
+
+JSON Response Parsing:
+- Planner responses: Wrapped in {"response": "```json\n{...}\n```"} format
+- Regular Gemini responses: Wrapped in {"response": "actual content"} format
+- Both parsers handle edge cases: direct JSON, wrapped JSON, missing response field
+
+Execution Flow:
+1. User submits goal via /api/orchestrate/graph endpoint
+2. Planner generates Plan (structured JSON with steps and dependencies)
+3. plan_to_graph.rs converts Plan into graph-flow Graph
+4. GraphExecutor uses FlowRunner to execute graph
+5. FlowRunner executes tasks in parallel based on dependencies
+6. Each task stores output in context for dependent tasks
+7. Graph completes when all tasks have executed
+
+BUG FIXES
+---------
+
+1. Infinite Loop on Graph Completion
+   Problem: When final task completed, graph-flow returned Paused status with 
+   reason "No outgoing edge found from current task", causing retry loop.
+   
+   Solution: Added check to detect when all tasks have outputs - if true, treat 
+   as completion and break execution loop.
+
+2. JSON Parsing for Planner Responses
+   Problem: Gemini CLI with --output-format json wraps Plan JSON in markdown code 
+   blocks within a "response" field, causing deserialization to fail.
+   
+   Solution: Implemented parse_planner_response() that:
+   - Tries direct Plan parsing first
+   - Falls back to parsing WrappedResponse structure
+   - Extracts JSON from markdown code fences (```json\n...\n```)
+   - Parses extracted JSON as Plan
+
+3. Status Messages Instead of Content in Files
+   Problem: With --yolo flag, Gemini CLI acted as an agent and wrote files directly, 
+   outputting status messages ("I have written...") to stdout instead of actual content.
+   
+   Solution: Removed --yolo flag from regular Gemini agent configuration. Now uses 
+   --output-format json without --yolo, so Gemini outputs content as JSON which we 
+   parse and extract.
+
+4. Authentication in Docker
+   Problem: Gemini CLI couldn't authenticate in Docker container despite mounting 
+   ~/.gemini directory.
+   
+   Solution: Ensured gemini auth login was run on host first to create settings.json 
+   and oauth_creds.json, which are then mounted into container.
+
+TESTING & VERIFICATION
+----------------------
+
+Test Suite:
+- 146 total tests: 128 unit tests + 14 integration tests + 4 doctests
+- All tests passing after implementation
+
+Verification Steps (TB4PC Process):
+1. Test: cargo test (all tests pass)
+2. Build: cargo build (compiles successfully)
+3. 4 Checks: Linter, Clippy, Type checking, Documentation
+4. Pass: All checks pass
+5. Continue: Deploy/restart backend
+
+Example Test Case:
+Goal: "Write a poem about Rust and save it to rust_poem3.txt"
+
+Expected Flow:
+1. Planner generates 2-step plan:
+   - step_1: run_gemini("Write a poem about Rust")
+   - step_2: create_file("rust_poem3.txt", content_from="step_1.output")
+2. Step 1 executes: Gemini outputs poem as JSON {"response": "poem content..."}
+3. Poem extracted from JSON and stored in context as "step_1.output"
+4. Step 2 executes: Reads "step_1.output" from context, writes to rust_poem3.txt
+5. File contains actual poem content, not status messages
+
+CONFIGURATION
+-------------
+
+OrchestratorConfig (in state/config.rs):
+- max_parallel_tasks: Maximum number of tasks to execute in parallel
+- gemini_model: Model to use for planning
+- max_goal_length: Maximum goal length in characters
+- plan_timeout_secs: Timeout for plan generation
+
+Agent Configuration:
+- Regular Gemini Agent: ["--output-format", "json"] (no --yolo)
+- Planner Agent: ["--yolo", "--output-format", "json"]
+
+API ENDPOINTS
+-------------
+
+POST /api/orchestrate/graph?goal=<goal>
+- Generates plan and executes it using graph-flow
+- Returns execution result with status and outputs
+
+GET /api/orchestrate/graph?goal=<goal>
+- Generates plan and returns it without execution
+
+POST /api/orchestrate
+- Legacy endpoint (still functional, uses graph-flow internally)
+
+FUTURE IMPROVEMENTS
+-------------------
+
+1. Streaming Task Output: Real-time updates as tasks execute
+2. Task Retry Logic: Automatic retry for failed tasks
+3. Dynamic Parallelism: Adjust parallelism based on system load
+4. Task Cancellation: Ability to cancel executing graphs
+5. Progress Tracking: More granular progress reporting per task
+6. Error Recovery: Resume execution from failure point
+
+RELATED FILES
+-------------
+
+Core Implementation:
+- backend/src/orchestrator/graph_executor.rs
+- backend/src/orchestrator/plan_to_graph.rs
+- backend/src/orchestrator/tasks.rs
+- backend/src/orchestrator/primitives.rs
+
+Configuration:
+- backend/src/state/config.rs
+- backend/src/api/utils.rs
+
+API Endpoints:
+- backend/src/api/orchestrator_graph.rs
+- backend/src/api/orchestrator.rs
+
+Documentation:
+- docs/v1-orchestrator.md (previous orchestrator design)
+- tests/orchestrator_integration_test.rs (integration tests)
+
