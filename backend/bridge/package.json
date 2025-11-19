@@ -1,0 +1,17 @@
+{
+  "name": "gemini-bridge",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Bridge script for Gemini CLI using @google/gemini-cli-core SDK",
+  "main": "gemini-bridge.js",
+  "scripts": {
+    "test": "node gemini-bridge.js"
+  },
+  "dependencies": {
+    "@google/gemini-cli-core": "file:../../gemini-cli/packages/core"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
+

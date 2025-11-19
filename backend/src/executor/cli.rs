@@ -76,10 +76,11 @@ impl CliExecutor {
             cmd.env("GEMINI_API_KEY", api_key);
         }
 
-        // Set working directory if specified
-        if let Some(work_dir) = &agent.config.working_dir {
-            cmd.current_dir(work_dir);
-        }
+        // Set working directory
+        // If not specified, use /tmp to prevent Gemini CLI from reading project files
+        // This ensures the AI doesn't get unwanted context from the project structure
+        let work_dir = agent.config.working_dir.as_deref().unwrap_or("/tmp");
+        cmd.current_dir(work_dir);
 
         debug!(
             command = %agent.config.command,

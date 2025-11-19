@@ -4,6 +4,7 @@
 //! The main binary is in `src/main.rs`.
 
 pub mod api;
+pub mod chat;
 pub mod config;
 pub mod error;
 pub mod executor;

@@ -7,6 +7,7 @@ services:
       - "8080:8080"
     volumes:
       - ./backend:/app
+      - ../gemini-cli:/app/gemini-cli
       - cargo-cache:/usr/local/cargo/registry
       - cargo-git-cache:/usr/local/cargo/git
       - cargo-build-cache:/app/target
@@ -16,14 +17,19 @@ services:
       # This allows using the 1,000 requests/day free tier instead of API key limits
       # Credentials are stored in ~/.gemini/ after running 'gemini auth login' on host
       - ${HOME}/.gemini:/root/.gemini
+      # Persistent storage for SQLite database
+      - chat-db:/app/data
     environment:
       - RUST_LOG=debug
       - RUST_BACKTRACE=1
       - PORT=8080
       - HOST=0.0.0.0
-      # GEMINI_API_KEY is commented out to use Google account auth (free tier: 1,000/day)
-      # If you need to use API key instead, uncomment this line and comment out the .gemini volume mount above
-      # - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # GEMINI_API_KEY from .env file (docker-compose automatically loads .env)
+      # If using API key, uncomment this line. If using Google account auth, keep commented and use .gemini volume mount above
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # System prompt override for Gemini CLI (general-purpose assistant)
+      # This overrides the default "software engineering only" persona
+      - GEMINI_SYSTEM_MD=/app/prompts/general-assistant.md
     networks:
       - app-network
     # Health check
@@ -55,6 +61,7 @@ volumes:
   cargo-cache:
   cargo-git-cache:
   cargo-build-cache:
+  chat-db:
 
 networks:
   app-network:

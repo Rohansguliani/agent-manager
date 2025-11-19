@@ -3,28 +3,28 @@
 //! Contains HTTP request handlers for executing queries with agents
 //! and streaming responses using Server-Sent Events (SSE).
 
-use crate::api::streaming::create_sse_stream;
 use crate::api::utils::{
-    apply_working_directory_context, create_executor, find_or_create_gemini_agent,
-    update_agent_status, validate_query,
+    apply_working_directory_context, create_executor, update_agent_status, validate_query,
+    RouterState,
 };
+use crate::chat::{Message, MessageRole};
 use crate::error::AppError;
-use crate::executor::StreamingCliExecutor;
-use crate::state::{AgentId, AgentStatus, AppState};
+use crate::state::{AgentId, AgentStatus};
 use axum::{
     extract::{Path, State},
     response::{Json, Response},
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
+use uuid::Uuid;
 
 /// Query request
 #[derive(Deserialize)]
 pub struct QueryRequest {
     /// The query string to execute
     pub query: String,
+    /// Optional conversation ID to associate this query with a chat conversation
+    pub conversation_id: Option<String>,
 }
 
 /// Query response
@@ -40,7 +40,7 @@ pub struct QueryResponse {
 
 /// POST /api/agents/:id/query - Execute a query with the agent
 pub async fn query_agent(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
     Path(id): Path<AgentId>,
     Json(request): Json<QueryRequest>,
 ) -> Result<Json<QueryResponse>, AppError> {
@@ -91,47 +91,86 @@ pub async fn query_agent(
 }
 
 /// POST /api/query/stream - Stream query response using Server-Sent Events
-/// (simplified - auto-uses first Gemini agent)
+/// Uses persistent subprocess per conversation (no manual context building)
 pub async fn query_stream(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((_state, chat_db, _process_manager)): State<RouterState>,
     Json(request): Json<QueryRequest>,
 ) -> Result<Response, AppError> {
-    // Find or create Gemini agent and apply working directory context
-    let agent = find_or_create_gemini_agent(&state).await;
-
-    // Log working directory for debugging
-    tracing::debug!(
-        agent_id = %agent.id,
-        working_dir = ?agent.config.working_dir,
-        "Agent configured for query execution"
-    );
-
     // Validate query
     validate_query(&request.query)?;
 
-    // Update agent status to Running
-    update_agent_status(&state, &agent.id, AgentStatus::Running).await;
+    // Get conversation_id - required for persistent subprocess approach
+    let conversation_id = request.conversation_id.as_ref().ok_or_else(|| {
+        AppError::InvalidAgentConfig(
+            "conversation_id is required for persistent subprocess approach".to_string(),
+        )
+    })?;
 
-    // Create streaming executor
-    let executor = StreamingCliExecutor::new(30);
+    // Verify conversation exists
+    let conversation = chat_db
+        .get_conversation(conversation_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::FileNotFound(format!("Conversation not found: {}", conversation_id))
+        })?;
 
-    // Create SSE stream
-    create_sse_stream(executor, agent, request.query, state)
+    // Create user message
+    let user_message = Message::new(
+        Uuid::new_v4().to_string(),
+        conversation_id.clone(),
+        MessageRole::User,
+        request.query.clone(),
+    );
+
+    // Save user message first
+    chat_db.add_message(&user_message).await?;
+
+    // Update title if needed (after message is saved)
+    if conversation.title == "New Chat" {
+        let generated_title = crate::api::chat::generate_title_from_message(&request.query);
+        chat_db
+            .update_conversation(conversation_id, &generated_title)
+            .await?;
+    }
+
+    // Get conversation history (excluding the message we just added)
+    // We'll include all previous messages for context
+    let mut conversation_history = chat_db.get_messages(conversation_id).await?;
+    // Remove the user message we just added (we'll add it back with the query)
+    conversation_history.pop();
+
+    // TODO: Update to use bridge manager once implemented (Phase 3)
+    // For now, this endpoint is disabled - use simple_chat endpoint instead
+    Err(AppError::Internal(anyhow::anyhow!(
+        "Bridge approach not yet implemented for queries endpoint. Use simple_chat endpoint instead."
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::utils::MAX_QUERY_LENGTH;
+    use crate::api::utils::{RouterState, MAX_QUERY_LENGTH};
+    use crate::chat::ChatDb;
     use crate::state::{Agent, AgentType, AppState};
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
 
-    fn create_test_state() -> Arc<RwLock<AppState>> {
-        Arc::new(RwLock::new(AppState::new()))
+    async fn create_test_router_state() -> RouterState {
+        let app_state = Arc::new(RwLock::new(AppState::new()));
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let chat_db = ChatDb::new(db_path.to_str().unwrap())
+            .await
+            .expect("Failed to create test database");
+        let bridge_manager = Arc::new(crate::chat::BridgeManager::new());
+        (app_state, Arc::new(chat_db), bridge_manager)
     }
 
     #[tokio::test]
     async fn test_query_agent_empty_query() {
-        let state = create_test_state();
+        let router_state = create_test_router_state().await;
+        let (state, _, _) = &router_state;
         // Create an agent
         let mut state_write = state.write().await;
         let agent = Agent::new(
@@ -144,15 +183,22 @@ mod tests {
 
         let request = QueryRequest {
             query: "".to_string(),
+            conversation_id: None,
         };
 
-        let result = query_agent(State(state), Path("test-1".to_string()), Json(request)).await;
+        let result = query_agent(
+            State(router_state.clone()),
+            Path("test-1".to_string()),
+            Json(request),
+        )
+        .await;
         assert!(result.is_err(), "Should fail with empty query");
     }
 
     #[tokio::test]
     async fn test_query_agent_too_long() {
-        let state = create_test_state();
+        let router_state = create_test_router_state().await;
+        let (state, _, _) = &router_state;
         // Create an agent
         let mut state_write = state.write().await;
         let agent = Agent::new(
@@ -165,9 +211,15 @@ mod tests {
 
         let request = QueryRequest {
             query: "a".repeat(MAX_QUERY_LENGTH + 1),
+            conversation_id: None,
         };
 
-        let result = query_agent(State(state), Path("test-1".to_string()), Json(request)).await;
+        let result = query_agent(
+            State(router_state.clone()),
+            Path("test-1".to_string()),
+            Json(request),
+        )
+        .await;
         assert!(result.is_err(), "Should fail with too long query");
     }
 }

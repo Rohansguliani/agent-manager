@@ -3,13 +3,11 @@
 //! Provides endpoints to inspect and visualize the execution graph structure
 //! for debugging and monitoring purposes.
 
+use crate::api::utils::RouterState;
 use crate::error::AppError;
 use crate::orchestrator::plan_to_graph::build_graph_from_plan;
-use crate::state::AppState;
 use axum::{extract::State, response::Json};
 use serde::Serialize;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// Graph structure representation for visualization
 #[derive(Debug, Serialize)]
@@ -45,7 +43,7 @@ pub struct GraphEdge {
 /// * `Ok(Json<GraphStructure>)` - The graph structure
 /// * `Err(AppError)` - If plan generation or graph building fails
 pub async fn get_graph_structure(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<GraphStructure>, AppError> {
     use crate::orchestrator::primitives::internal_run_planner;
@@ -80,22 +78,32 @@ pub async fn get_graph_structure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::utils::RouterState;
+    use crate::chat::ChatDb;
     use crate::state::AppState;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use tempfile::TempDir;
     use tokio::sync::RwLock;
 
-    fn create_test_state() -> Arc<RwLock<AppState>> {
-        Arc::new(RwLock::new(AppState::new()))
+    async fn create_test_router_state() -> RouterState {
+        let app_state = Arc::new(RwLock::new(AppState::new()));
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let chat_db = ChatDb::new(db_path.to_str().unwrap())
+            .await
+            .expect("Failed to create test database");
+        let bridge_manager = Arc::new(crate::chat::BridgeManager::new());
+        (app_state, Arc::new(chat_db), bridge_manager)
     }
 
     #[tokio::test]
     async fn test_get_graph_structure_missing_goal() {
         // Test that missing 'goal' parameter returns an error
-        let state = create_test_state();
+        let router_state = create_test_router_state().await;
         let params = HashMap::new();
 
-        let result = get_graph_structure(State(state), axum::extract::Query(params)).await;
+        let result = get_graph_structure(State(router_state), axum::extract::Query(params)).await;
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(error.to_string().contains("goal") || error.to_string().contains("Missing"));

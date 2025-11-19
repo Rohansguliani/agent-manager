@@ -2,6 +2,7 @@
 // This file runs before all tests
 
 import { vi } from 'vitest';
+import '@testing-library/jest-dom';
 
 // Mock window.matchMedia if needed
 Object.defineProperty(window, 'matchMedia', {
@@ -17,4 +18,7 @@ Object.defineProperty(window, 'matchMedia', {
     dispatchEvent: vi.fn(),
   })),
 });
+
+// Mock scrollIntoView (not available in jsdom)
+Element.prototype.scrollIntoView = vi.fn();
 

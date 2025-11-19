@@ -36,6 +36,8 @@ pub struct PersistenceConfig {
     /// Base directory for storing agent data
     #[allow(dead_code)] // Will be used when persistence is fully implemented
     pub data_dir: String,
+    /// Path to SQLite database file for chat storage
+    pub db_path: String,
 }
 
 /// Execution configuration
@@ -64,6 +66,10 @@ impl Config {
                     } else {
                         ".agent-manager".to_string()
                     }
+                }),
+                db_path: env::var("DB_PATH").unwrap_or_else(|_| {
+                    // Default to /app/data/chat.db in Docker, or ./data/chat.db locally
+                    "/app/data/chat.db".to_string()
                 }),
             },
             execution: ExecutionConfig {

@@ -58,7 +58,7 @@ pub enum WebSocketMessage {
 /// * `Response` - HTTP response initiating WebSocket connection
 pub async fn websocket_handler(
     ws: WebSocketUpgrade,
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<crate::api::utils::RouterState>,
 ) -> Response {
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }

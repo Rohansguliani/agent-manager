@@ -1,0 +1,390 @@
+Chat UI Implementation - Remaining Steps
+==========================================
+
+This document outlines the remaining steps to complete the chat UI pivot.
+
+PHASE 2: BACKEND - CHAT API ENDPOINTS
+=====================================
+
+Step 2.1: Create Chat API Module Structure
+-------------------------------------------
+File: backend/src/api/chat.rs (NEW)
+
+Create the following endpoints:
+- GET /api/chat/conversations - List all conversations
+- POST /api/chat/conversations - Create new conversation
+- GET /api/chat/conversations/:id - Get conversation with messages
+- POST /api/chat/conversations/:id/messages - Send message (streams response)
+- DELETE /api/chat/conversations/:id - Delete conversation
+- PUT /api/chat/conversations/:id/title - Update conversation title
+
+Request/Response Types:
+- ConversationResponse: { id, title, created_at, updated_at }
+- MessageResponse: { id, conversation_id, role, content, created_at }
+- CreateConversationRequest: { title? } (optional, auto-generated from first message)
+- SendMessageRequest: { content }
+- ConversationWithMessagesResponse: { conversation, messages: Vec<MessageResponse> }
+
+Step 2.2: Integrate Chat Database into API
+-------------------------------------------
+- Add ChatDb to router state (alongside AppState)
+- Update main.rs to pass chat_db to router
+- Create handlers that use chat_db for all operations
+
+Step 2.3: Implement Message Streaming
+-------------------------------------
+- Modify POST /api/chat/conversations/:id/messages to:
+  1. Save user message to database
+  2. Load conversation history (for context)
+  3. Call existing /api/query/stream endpoint (or integrate directly)
+  4. Stream AI response back
+  5. Save AI response to database as it completes
+- Use Server-Sent Events (SSE) for streaming (already have infrastructure)
+
+Step 2.4: Add Conversation Context to Queries
+---------------------------------------------
+- When sending message, load previous messages from conversation
+- Build conversation history string
+- Pass to Gemini CLI with conversation context
+- Format: "Previous conversation:\n[user]: ...\n[assistant]: ...\n\nNew message: ..."
+
+Step 2.5: Auto-generate Conversation Titles
+-------------------------------------------
+- When creating conversation, if no title provided:
+  1. Use first user message (truncated to 50 chars)
+  2. Or call Gemini to generate a title from first message
+  3. Update conversation title after first exchange
+
+Step 2.6: Register Chat Routes
+-------------------------------
+- Add chat routes to main.rs router
+- Ensure proper CORS headers
+- Add request validation
+
+
+PHASE 3: FRONTEND - COMPLETE REDESIGN
+======================================
+
+Step 3.1: Remove Old UI Components
+-----------------------------------
+Files to delete/archive:
+- frontend/src/components/FileManager.tsx
+- frontend/src/components/PlanGraph.tsx
+- frontend/src/components/Settings.tsx (or keep minimal version)
+- frontend/src/hooks/useOrchestrator.ts (or archive)
+- frontend/src/hooks/useStreamingQuery.ts (or archive)
+
+Keep:
+- ErrorBoundary.tsx (still needed)
+- api.ts (will update)
+
+Step 3.2: Create Chat Component Structure
+------------------------------------------
+Create: frontend/src/components/Chat/
+
+Files to create:
+1. ChatLayout.tsx - Main layout (sidebar + chat area)
+2. ChatSidebar.tsx - Conversation list sidebar
+3. ChatContainer.tsx - Main chat area with messages
+4. ChatMessage.tsx - Individual message bubble
+5. ChatInput.tsx - Message input with send button
+6. EmptyState.tsx - Landing page when no conversation selected
+
+Step 3.3: Create Chat Styles
+-----------------------------
+File: frontend/src/styles/chat.ts
+
+Color Scheme (Obsidian Black):
+- Background: #0d1117
+- Sidebar: #161b22
+- User message: #1f6feb (blue accent)
+- AI message: #21262d (dark gray)
+- Text: #c9d1d9 (light gray)
+- Input border: #30363d
+- Accent red: #f85149 (errors)
+- Accent green: #3fb950 (success)
+
+Typography:
+- Message text: 14px
+- Sidebar: 13px
+- Headers: 16px bold
+- Font: System font stack
+
+Spacing:
+- Sidebar width: 260px
+- Message padding: 12px 16px
+- Input min height: 60px
+
+Step 3.4: Create Chat Hooks
+----------------------------
+File: frontend/src/hooks/useChat.ts
+
+Functions:
+- useConversations() - Load all conversations
+- useConversation(id) - Load conversation with messages
+- useSendMessage() - Send message and stream response
+- useCreateConversation() - Create new conversation
+- useDeleteConversation() - Delete conversation
+
+State management:
+- Current conversation ID
+- Messages array
+- Loading states
+- Error states
+
+Step 3.5: Update API Client
+----------------------------
+File: frontend/src/api.ts
+
+Add types:
+- Conversation, Message, MessageRole
+- CreateConversationRequest, SendMessageRequest
+- ConversationWithMessagesResponse
+
+Add methods:
+- listConversations()
+- getConversation(id)
+- createConversation(title?)
+- sendMessage(conversationId, content) - returns SSE stream
+- deleteConversation(id)
+- updateConversationTitle(id, title)
+
+Step 3.6: Redesign App.tsx
+---------------------------
+File: frontend/src/App.tsx
+
+Replace entire content with:
+- ChatLayout component
+- Remove all orchestrator/planning UI
+- Simple chat interface only
+- Handle routing (if needed) for conversation selection
+
+
+PHASE 4: FRONTEND - CHAT FEATURES
+==================================
+
+Step 4.1: Sidebar Functionality
+--------------------------------
+ChatSidebar.tsx:
+- Display list of conversations (sorted by updated_at DESC)
+- "New Chat" button at top
+- Click conversation to load it
+- Highlight active conversation
+- Delete button (with confirmation) on hover
+- Search/filter conversations (optional)
+- Show conversation title and preview
+- Show timestamp (relative: "2 hours ago")
+
+Step 4.2: Message Display
+--------------------------
+ChatMessage.tsx:
+- User messages: Right-aligned, blue background (#1f6feb)
+- AI messages: Left-aligned, dark gray background (#21262d)
+- Show timestamp on hover
+- Markdown rendering for AI responses
+- Code syntax highlighting (use react-syntax-highlighter)
+- Copy code button
+- Streaming text animation (typewriter effect)
+
+ChatContainer.tsx:
+- Scrollable message list
+- Auto-scroll to bottom on new message
+- Virtual scrolling for performance (if >100 messages)
+- Loading indicator while fetching
+- Empty state when no messages
+
+Step 4.3: Input Area
+---------------------
+ChatInput.tsx:
+- Textarea with auto-resize
+- Send button (disabled while streaming)
+- Enter to send, Shift+Enter for new line
+- Character count (optional)
+- Placeholder: "Type your message here..."
+- Disabled state styling
+- Focus management
+
+Step 4.4: Empty State
+----------------------
+EmptyState.tsx:
+- Display when no conversation selected
+- "How can I help you?" heading
+- Example prompts/suggestions:
+  * "How does AI work?"
+  * "Explain quantum computing"
+  * "Write a Python function to..."
+  * "What is the meaning of life?"
+- "New Chat" button
+- Clean, centered design
+
+Step 4.5: Conversation Management
+----------------------------------
+- Create new conversation on "New Chat" click
+- Auto-save messages as they're sent
+- Update conversation title (editable in sidebar)
+- Delete conversation with confirmation modal
+- Handle conversation switching smoothly
+
+
+PHASE 5: POLISH & UX
+====================
+
+Step 5.1: Loading States
+------------------------
+- Skeleton loaders for conversation list
+- Typing indicator ("AI is thinking...") while streaming
+- Smooth transitions between states
+- Loading spinner in send button
+
+Step 5.2: Error Handling
+-------------------------
+- Network error messages
+- Retry button for failed requests
+- Error boundaries for React errors
+- Toast notifications for errors
+- Graceful degradation
+
+Step 5.3: Responsive Design
+---------------------------
+- Mobile-friendly sidebar (collapsible/hamburger menu)
+- Touch-friendly input area
+- Proper scrolling on mobile
+- Responsive message bubbles
+- Breakpoints: mobile (<768px), tablet (768-1024px), desktop (>1024px)
+
+Step 5.4: Performance Optimizations
+-----------------------------------
+- Virtual scrolling for long conversations (react-window)
+- Lazy load old messages (pagination)
+- Memoize expensive components
+- Debounce search/filter
+- Optimize re-renders with React.memo
+- Code splitting for markdown renderer
+
+Step 5.5: Accessibility
+------------------------
+- Keyboard navigation (Tab, Enter, Escape)
+- ARIA labels for screen readers
+- Focus indicators
+- Color contrast compliance
+- Semantic HTML
+
+Step 5.6: Animations & Transitions
+-----------------------------------
+- Smooth message appearance
+- Sidebar slide-in/out
+- Button hover effects
+- Input focus animations
+- Loading spinner animations
+- Use CSS transitions (not heavy libraries)
+
+
+IMPLEMENTATION ORDER (RECOMMENDED)
+==================================
+
+Week 1: Backend API
+1. Day 1: Create chat API endpoints (Steps 2.1-2.2)
+2. Day 2: Implement message streaming (Step 2.3)
+3. Day 3: Add conversation context (Step 2.4)
+4. Day 4: Auto-title generation (Step 2.5)
+5. Day 5: Testing & bug fixes
+
+Week 2: Frontend Core
+1. Day 1: Remove old UI, create component structure (Steps 3.1-3.2)
+2. Day 2: Create styles and hooks (Steps 3.3-3.4)
+3. Day 3: Update API client, redesign App.tsx (Steps 3.5-3.6)
+4. Day 4: Implement sidebar and message display (Steps 4.1-4.2)
+5. Day 5: Input area and empty state (Steps 4.3-4.4)
+
+Week 3: Features & Polish
+1. Day 1: Conversation management (Step 4.5)
+2. Day 2: Loading states and error handling (Steps 5.1-5.2)
+3. Day 3: Responsive design (Step 5.3)
+4. Day 4: Performance optimizations (Step 5.4)
+5. Day 5: Accessibility and animations (Steps 5.5-5.6)
+
+
+DEPENDENCIES TO ADD
+===================
+
+Frontend:
+- react-markdown - Markdown rendering for AI responses
+- remark-gfm - GitHub Flavored Markdown support
+- react-syntax-highlighter - Code syntax highlighting
+- react-window - Virtual scrolling (optional, for performance)
+- date-fns - Date formatting ("2 hours ago")
+
+Backend:
+- Already have: sqlx, chrono
+- Already have: SSE streaming infrastructure
+
+
+FILE STRUCTURE (FINAL)
+======================
+
+backend/
+├── src/
+│   ├── chat/              ✅ DONE
+│   │   ├── mod.rs
+│   │   ├── models.rs
+│   │   └── db.rs
+│   ├── api/
+│   │   └── chat.rs        ⏳ TODO
+│   └── migrations/
+│       └── 001_create_chats.sql  ✅ DONE
+
+frontend/
+├── src/
+│   ├── components/
+│   │   └── Chat/          ⏳ TODO
+│   │       ├── ChatLayout.tsx
+│   │       ├── ChatSidebar.tsx
+│   │       ├── ChatContainer.tsx
+│   │       ├── ChatMessage.tsx
+│   │       ├── ChatInput.tsx
+│   │       └── EmptyState.tsx
+│   ├── hooks/
+│   │   └── useChat.ts      ⏳ TODO
+│   ├── styles/
+│   │   └── chat.ts         ⏳ TODO
+│   └── App.tsx             ⏳ TODO (redesign)
+
+
+TESTING CHECKLIST
+=================
+
+Backend:
+- [ ] Create conversation
+- [ ] List conversations
+- [ ] Get conversation with messages
+- [ ] Send message and save to DB
+- [ ] Stream AI response
+- [ ] Save AI response to DB
+- [ ] Delete conversation
+- [ ] Update conversation title
+- [ ] Conversation context loading
+- [ ] Auto-title generation
+
+Frontend:
+- [ ] Sidebar displays conversations
+- [ ] Click conversation loads messages
+- [ ] Send message works
+- [ ] Streaming response displays
+- [ ] Messages persist after refresh
+- [ ] Create new conversation
+- [ ] Delete conversation
+- [ ] Empty state displays
+- [ ] Mobile responsive
+- [ ] Error handling works
+
+
+NOTES
+=====
+
+- Keep existing agent management API (for future use)
+- Chat API is separate from agent API
+- Use existing streaming infrastructure
+- Database persists in Docker volume
+- All chat data stored locally (privacy-focused)
+- Can add features later (search, export, etc.)
+

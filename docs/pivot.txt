@@ -1,0 +1,158 @@
+PIVOT: Simple Chat Implementation
+===================================
+
+This document describes the pivot to a simplified chat implementation using Gemini CLI locally.
+
+WHY THE PIVOT
+-------------
+The original agent-manager-gui was a complex system with:
+- Multiple agent types and configurations
+- Orchestration and planning systems
+- Complex state management
+- WebSocket streaming
+- Database persistence
+- Process management
+
+The goal was to simplify to a basic chat interface:
+- User types message → Backend → Gemini CLI → Response → Frontend
+- Fast, simple, and easy to understand
+- Keep existing code intact (create new files)
+
+WHAT WE BUILT
+-------------
+
+Backend (Rust):
+1. New API endpoint: `/api/simple-chat` (POST)
+   - Location: `backend/src/api/simple_chat.rs`
+   - Receives: `{ message: string, conversation_id?: string }`
+   - Returns: `{ response: string, success: bool, conversation_id: string }`
+
+2. Process Management:
+   - Spawns Gemini CLI process using `tokio::process::Command`
+   - Explicit process cleanup on timeout (60 seconds)
+   - Uses Arc<Mutex<Child>> to share process handle between wait and kill tasks
+   - Background task kills process if timeout occurs
+
+3. Context Management:
+   - In-memory HashMap storage: `HashMap<conversation_id, Vec<(role, content)>>`
+   - Conversation history formatted and included in each request
+   - Limited to last 20 messages (10 turns) to avoid token limits
+   - History formatted as: "Previous conversation:\n\nUser: ...\nAssistant: ...\n\nCurrent question: ..."
+
+4. Environment Variables:
+   - Reads GEMINI_API_KEY from .env (via docker-compose)
+   - Passes GEMINI_SYSTEM_MD for system prompt customization
+   - All env vars passed through to Gemini CLI process
+
+Frontend (React/TypeScript):
+1. New component: `SimpleChat.tsx`
+   - Simple chat UI with message history
+   - Tracks conversation_id for context
+   - Sends conversation_id with each message
+   - Displays user and assistant messages
+
+2. New page: `SimpleChatPage.tsx`
+   - Wrapper with error boundaries and toast notifications
+   - Replaces App.tsx in main.tsx
+
+3. API integration:
+   - Added `simpleChat(message, conversationId?)` to `api.ts`
+   - Handles conversation_id tracking
+
+HOW IT WORKS
+------------
+
+Flow:
+1. User types message in frontend
+2. Frontend sends POST to `/api/simple-chat` with message + conversation_id
+3. Backend:
+   a. Generates conversation_id if not provided
+   b. Retrieves conversation history from HashMap
+   c. Formats history + current message
+   d. Spawns Gemini CLI process with formatted message
+   e. Waits for output (with 60s timeout)
+   f. Stores new message pair in history
+   g. Returns response + conversation_id
+4. Frontend displays response and tracks conversation_id for next message
+
+Process Cleanup:
+- Background task sleeps for 60 seconds
+- If process hasn't completed, kills it explicitly
+- If process completes first, kill task is aborted
+- Uses Arc<Mutex<>> to safely share Child handle
+
+Context Management:
+- First message: No history, just current message
+- Subsequent messages: Previous conversation formatted and included
+- History limited to 20 messages (sliding window)
+- Each conversation isolated by conversation_id
+
+KEY DESIGN DECISIONS
+--------------------
+
+1. In-Memory Storage (not database):
+   - Fast and simple for development
+   - Lost on server restart (acceptable for now)
+   - Can migrate to database later if needed
+
+2. Explicit Process Cleanup:
+   - Prevents zombie processes
+   - Uses Arc<Mutex<>> pattern for shared ownership
+   - Background kill task with abort on completion
+
+3. Simple Context Formatting:
+   - Formats history as plain text prompt
+   - Works with Gemini CLI (which doesn't support multi-turn natively)
+   - Easy to understand and debug
+
+4. Separate Files:
+   - All new code in separate files
+   - Original code untouched
+   - Easy to switch back or merge later
+
+FILES CREATED/MODIFIED
+----------------------
+
+New Files:
+- backend/src/api/simple_chat.rs
+- frontend/src/components/SimpleChat.tsx
+- frontend/src/SimpleChatPage.tsx
+- docs/SIMPLE_CHAT_FLOW.md
+- docs/CONTEXT_MANAGEMENT.md
+- docs/pivot.txt (this file)
+
+Modified Files:
+- backend/src/api/mod.rs (added simple_chat module)
+- backend/src/main.rs (added /api/simple-chat route)
+- backend/Cargo.toml (added once_cell dependency)
+- frontend/src/api.ts (added simpleChat function)
+- frontend/src/main.tsx (switched to SimpleChatPage)
+- docker-compose.yml (updated GEMINI_API_KEY comment)
+- backend/prompts/general-assistant.md (improved prompt)
+
+BUG FIXES
+---------
+
+Issue: Gemini CLI output not being captured (empty response error)
+Problem: Without explicit stdout/stderr piping, output was going to Docker logs but not being captured by wait_with_output()
+Solution:
+- Added explicit piping: `cmd.stdout(Stdio::piped())` and `cmd.stderr(Stdio::piped())`
+- Added fallback to check stderr if stdout is empty (Gemini CLI may output to stderr)
+- Added filtering to remove diagnostic messages from stderr
+- Added debug logging to show stdout/stderr lengths
+Result: Output now captured correctly, responses working properly
+
+WHAT'S NEXT
+-----------
+
+Potential improvements:
+1. Migrate context storage to database (use existing ChatDb)
+2. Add conversation management (list, delete, rename)
+3. Implement better token management (summarization)
+4. Add streaming responses
+5. Add error recovery and retry logic
+6. Add conversation export/import
+7. UI overhaul with sidebar, obsidian black theme, sleek design
+
+The simple chat is working and provides a clean foundation to build on.
+

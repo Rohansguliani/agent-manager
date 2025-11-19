@@ -111,7 +111,7 @@ pub async fn internal_run_gemini(
 ///
 /// # Returns
 /// * `Result<String, serde_json::Error>` - Extracted response content or parsing error
-fn parse_gemini_json_response(response: &str) -> Result<String, serde_json::Error> {
+pub fn parse_gemini_json_response(response: &str) -> Result<String, serde_json::Error> {
     // First, try to parse as a JSON object with a "response" field
     #[derive(Deserialize)]
     struct GeminiResponse {
@@ -537,6 +537,13 @@ mod tests {
         Arc::new(RwLock::new(AppState::new()))
     }
 
+    fn build_test_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("Failed to build reqwest client for tests")
+    }
+
     #[tokio::test]
     async fn test_internal_create_file_simple() {
         let temp_dir = tempdir().expect("Failed to create temp dir");
@@ -637,7 +644,7 @@ mod tests {
         std::env::remove_var("GEMINI_API_KEY");
 
         // Create test HTTP client
-        let client = reqwest::Client::new();
+        let client = build_test_client();
         let result = internal_run_gemini_api(&client, "test prompt", false).await;
 
         assert!(result.is_err());
@@ -666,7 +673,7 @@ mod tests {
         std::env::set_var("GEMINI_API_KEY", "");
 
         // Create test HTTP client
-        let client = reqwest::Client::new();
+        let client = build_test_client();
         let result = internal_run_gemini_api(&client, "test prompt", false).await;
 
         assert!(result.is_err());

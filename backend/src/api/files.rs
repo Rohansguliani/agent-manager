@@ -3,17 +3,15 @@
 //! Provides HTTP endpoints for browsing the file system and managing file context.
 //! Uses the file service layer for business logic.
 
+use crate::api::utils::RouterState;
 use crate::error::AppError;
 use crate::services::files::FileService;
-use crate::state::AppState;
 use axum::{
     extract::{Query, State},
     response::Json,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 // Re-export FileInfo for API responses (used by frontend)
 pub use crate::services::files::FileInfo;
@@ -43,7 +41,7 @@ pub struct WorkingDirectoryResponse {
 
 /// GET /api/files - List files in a directory
 pub async fn list_files(
-    State(_state): State<Arc<RwLock<AppState>>>,
+    State((_state, _, _)): State<RouterState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<ListFilesResponse>, AppError> {
     // Get path from query params, default to home directory
@@ -69,7 +67,7 @@ pub async fn list_files(
 
 /// GET /api/files/working-directory - Get current working directory context
 pub async fn get_working_directory(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
 ) -> Result<Json<WorkingDirectoryResponse>, AppError> {
     let state = state.read().await;
     let path = state.working_directory().cloned();
@@ -78,7 +76,7 @@ pub async fn get_working_directory(
 
 /// POST /api/files/working-directory - Set working directory context
 pub async fn set_working_directory(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
     Json(request): Json<SetWorkingDirectoryRequest>,
 ) -> Result<Json<WorkingDirectoryResponse>, AppError> {
     // Validate and canonicalize path if provided using service layer
@@ -100,22 +98,32 @@ pub async fn set_working_directory(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::utils::RouterState;
+    use crate::chat::ChatDb;
     use crate::state::AppState;
     use std::sync::Arc;
     use tempfile::tempdir;
+    use tempfile::TempDir;
     use tokio::sync::RwLock;
 
-    fn create_test_state() -> Arc<RwLock<AppState>> {
-        Arc::new(RwLock::new(AppState::new()))
+    async fn create_test_router_state() -> RouterState {
+        let app_state = Arc::new(RwLock::new(AppState::new()));
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let chat_db = ChatDb::new(db_path.to_str().unwrap())
+            .await
+            .expect("Failed to create test database");
+        let bridge_manager = Arc::new(crate::chat::BridgeManager::new());
+        (app_state, Arc::new(chat_db), bridge_manager)
     }
 
     #[tokio::test]
     async fn test_list_files_current_directory() {
-        let state = create_test_state();
+        let router_state = create_test_router_state().await;
         let params = HashMap::new();
         // Don't set path, should default to "."
 
-        let result = list_files(State(state), Query(params)).await;
+        let result = list_files(State(router_state.clone()), Query(params)).await;
         assert!(result.is_ok(), "Should list current directory");
         let response = result.unwrap();
         assert!(!response.files.is_empty() || response.path.contains('.'));
@@ -133,11 +141,11 @@ mod tests {
             .expect("Failed to create test file");
         std::fs::create_dir(temp_dir.path().join("subdir")).expect("Failed to create subdir");
 
-        let state = create_test_state();
+        let router_state = create_test_router_state().await;
         let mut params = HashMap::new();
         params.insert("path".to_string(), temp_path.clone());
 
-        let result = list_files(State(state), Query(params)).await;
+        let result = list_files(State(router_state.clone()), Query(params)).await;
         assert!(result.is_ok(), "Should list directory");
         let response = result.unwrap();
         assert_eq!(response.files.len(), 3);
@@ -151,11 +159,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_files_nonexistent() {
-        let state = create_test_state();
+        let router_state = create_test_router_state().await;
         let mut params = HashMap::new();
         params.insert("path".to_string(), "/nonexistent/path/12345".to_string());
 
-        let result = list_files(State(state), Query(params)).await;
+        let result = list_files(State(router_state.clone()), Query(params)).await;
         assert!(result.is_err(), "Should fail for nonexistent path");
         match result.unwrap_err() {
             AppError::FileNotFound(_) => {
@@ -169,8 +177,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_working_directory_default() {
-        let state = create_test_state();
-        let result = get_working_directory(State(state)).await;
+        let router_state = create_test_router_state().await;
+        let result = get_working_directory(State(router_state.clone())).await;
         assert!(result.is_ok());
         let response = result.unwrap();
         assert!(response.path.is_none(), "Default should be None");
@@ -181,20 +189,20 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let temp_path = temp_dir.path().to_str().unwrap().to_string();
 
-        let state = create_test_state();
+        let router_state = create_test_router_state().await;
         let request = SetWorkingDirectoryRequest {
             path: Some(temp_path.clone()),
         };
 
         // Set working directory
-        let result = set_working_directory(State(state.clone()), Json(request)).await;
+        let result = set_working_directory(State(router_state.clone()), Json(request)).await;
         assert!(result.is_ok(), "Should set working directory");
         let response = result.unwrap();
         assert!(response.path.is_some());
         assert!(response.path.as_ref().unwrap().contains(&temp_path));
 
         // Get working directory
-        let result = get_working_directory(State(state)).await;
+        let result = get_working_directory(State(router_state.clone())).await;
         assert!(result.is_ok());
         let response = result.unwrap();
         assert!(response.path.is_some());
@@ -203,12 +211,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_working_directory_nonexistent() {
-        let state = create_test_state();
+        let router_state = create_test_router_state().await;
         let request = SetWorkingDirectoryRequest {
             path: Some("/nonexistent/path/12345".to_string()),
         };
 
-        let result = set_working_directory(State(state), Json(request)).await;
+        let result = set_working_directory(State(router_state.clone()), Json(request)).await;
         assert!(result.is_err(), "Should fail for nonexistent path");
         match result.unwrap_err() {
             AppError::FileNotFound(_) => {
@@ -226,12 +234,12 @@ mod tests {
         let file_path = temp_dir.path().join("test.txt");
         std::fs::write(&file_path, "content").expect("Failed to create file");
 
-        let state = create_test_state();
+        let router_state = create_test_router_state().await;
         let request = SetWorkingDirectoryRequest {
             path: Some(file_path.to_str().unwrap().to_string()),
         };
 
-        let result = set_working_directory(State(state), Json(request)).await;
+        let result = set_working_directory(State(router_state.clone()), Json(request)).await;
         assert!(result.is_err(), "Should fail for file path");
         match result.unwrap_err() {
             AppError::NotADirectory(_) => {
@@ -248,23 +256,23 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let temp_path = temp_dir.path().to_str().unwrap().to_string();
 
-        let state = create_test_state();
+        let router_state = create_test_router_state().await;
 
         // Set working directory first
         let request = SetWorkingDirectoryRequest {
             path: Some(temp_path),
         };
-        let _ = set_working_directory(State(state.clone()), Json(request)).await;
+        let _ = set_working_directory(State(router_state.clone()), Json(request)).await;
 
         // Clear working directory
         let request = SetWorkingDirectoryRequest { path: None };
-        let result = set_working_directory(State(state.clone()), Json(request)).await;
+        let result = set_working_directory(State(router_state.clone()), Json(request)).await;
         assert!(result.is_ok());
         let response = result.unwrap();
         assert!(response.path.is_none(), "Should clear working directory");
 
         // Verify it's cleared
-        let result = get_working_directory(State(state)).await;
+        let result = get_working_directory(State(router_state.clone())).await;
         assert!(result.is_ok());
         let response = result.unwrap();
         assert!(response.path.is_none());

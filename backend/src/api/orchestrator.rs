@@ -7,6 +7,7 @@
 //! The orchestration uses SSE (Server-Sent Events) to stream status updates
 //! to the frontend, allowing real-time feedback on multi-step operations.
 
+use crate::api::utils::RouterState;
 use crate::error::AppError;
 use crate::orchestrator::config::{
     validate_and_apply_config_update, ConfigUpdateRequest, OrchestratorConfig,
@@ -19,7 +20,6 @@ use crate::orchestrator::plan_optimizer::{
 use crate::orchestrator::primitives::{
     internal_create_file, internal_run_gemini, internal_run_planner,
 };
-use crate::state::AppState;
 #[allow(unused_imports)] // Used in map_err on lines 179 and 289
 use anyhow::anyhow;
 use axum::{
@@ -31,8 +31,6 @@ use axum::{
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// Helper function to serialize an OrchestrationEvent to JSON string
 ///
@@ -164,7 +162,7 @@ pub enum OrchestrationEvent {
 /// * `Ok(Response)` - SSE stream with status updates
 /// * `Err(AppError)` - If orchestration fails
 pub async fn orchestrate_poem(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
     Json(request): Json<OrchestrationRequest>,
 ) -> Result<Response, AppError> {
     let config = OrchestratorConfig::default();
@@ -297,7 +295,7 @@ pub async fn orchestrate_poem(
 /// * `Ok(Response)` - SSE stream with status updates
 /// * `Err(AppError)` - If orchestration fails
 pub async fn orchestrate(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
     Json(request): Json<OrchestrationRequest>,
 ) -> Result<Response, AppError> {
     use async_stream::stream;
@@ -459,7 +457,7 @@ pub struct PlanAnalysisResponse {
 /// * `Ok(Json<PlanAnalysisResponse>)` - Plan + analysis
 /// * `Err(AppError)` - If planning fails
 pub async fn plan_with_analysis(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
     Json(request): Json<OrchestrationRequest>,
 ) -> Result<Json<PlanAnalysisResponse>, AppError> {
     let config = OrchestratorConfig::default();
@@ -519,26 +517,36 @@ pub async fn update_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::utils::RouterState;
+    use crate::chat::ChatDb;
     use crate::state::AppState;
     use std::sync::Arc;
+    use tempfile::TempDir;
     use tokio::sync::RwLock;
 
-    fn create_test_state() -> Arc<RwLock<AppState>> {
-        Arc::new(RwLock::new(AppState::new()))
+    async fn create_test_router_state() -> RouterState {
+        let app_state = Arc::new(RwLock::new(AppState::new()));
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let chat_db = ChatDb::new(db_path.to_str().unwrap())
+            .await
+            .expect("Failed to create test database");
+        let bridge_manager = Arc::new(crate::chat::BridgeManager::new());
+        (app_state, Arc::new(chat_db), bridge_manager)
     }
 
     #[tokio::test]
     async fn test_orchestrate_poem_request_structure() {
         // Test that the endpoint accepts requests and returns SSE response
         // This is a structural test - full integration would require Gemini CLI
-        let state = create_test_state();
+        let router_state = create_test_router_state().await;
         let request = OrchestrationRequest {
             goal: "Write a test poem".to_string(),
         };
 
         // This will fail if Gemini CLI is not available, but we can at least
         // test that the endpoint structure is correct
-        let result = orchestrate_poem(State(state), Json(request)).await;
+        let result = orchestrate_poem(State(router_state), Json(request)).await;
 
         // Should return Ok(Response) even if Gemini fails internally
         // The response should be an SSE stream
@@ -564,12 +572,12 @@ mod tests {
     #[tokio::test]
     async fn test_orchestrate_poem_with_empty_goal() {
         // Test that empty goal uses default prompt
-        let state = create_test_state();
+        let router_state = create_test_router_state().await;
         let request = OrchestrationRequest {
             goal: String::new(),
         };
 
-        let result = orchestrate_poem(State(state), Json(request)).await;
+        let result = orchestrate_poem(State(router_state), Json(request)).await;
 
         // Should return SSE response (even if Gemini fails)
         assert!(result.is_ok());

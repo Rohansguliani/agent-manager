@@ -7,6 +7,7 @@
 //! 4. Error propagation through phases
 
 use agent_manager_backend::api::orchestrator::{orchestrate, OrchestrationRequest};
+use agent_manager_backend::chat::{BridgeManager, ChatDb};
 use agent_manager_backend::orchestrator::{
     plan_optimizer::{analyze_bottlenecks, estimate_execution_time, estimate_token_usage},
     plan_to_graph,
@@ -17,11 +18,19 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
 use std::sync::Arc;
+use tempfile::TempDir;
 use tokio::sync::RwLock;
 
-/// Helper to create test AppState with HTTP client
-fn create_test_state() -> Arc<RwLock<AppState>> {
-    Arc::new(RwLock::new(AppState::new()))
+/// Helper to create test AppState with HTTP client and ChatDb
+async fn create_test_state() -> (Arc<RwLock<AppState>>, Arc<ChatDb>, Arc<BridgeManager>) {
+    let app_state = Arc::new(RwLock::new(AppState::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+    let chat_db = ChatDb::new(db_path.to_str().unwrap())
+        .await
+        .expect("Failed to create test database");
+    let bridge_manager = Arc::new(BridgeManager::new());
+    (app_state, Arc::new(chat_db), bridge_manager)
 }
 
 /// Test 1: Full orchestration flow with mocked planner
@@ -74,7 +83,7 @@ async fn test_full_orchestration_flow_structure() {
     assert_eq!(bottlenecks.longest_chain_length, 2); // step_1 -> step_2
 
     // Test graph building (execution requires external services, so we test structure)
-    let state = create_test_state();
+    let (state, _, _) = create_test_state().await;
     let graph_result = plan_to_graph::build_graph_from_plan(plan.clone(), state.clone());
 
     assert!(graph_result.is_ok());
@@ -103,7 +112,7 @@ async fn test_error_propagation_invalid_plan() {
 
     // Plan validation should pass (task name is just a string)
     // But graph building should fail
-    let state = create_test_state();
+    let (state, _, _) = create_test_state().await;
     let graph_result = plan_to_graph::build_graph_from_plan(invalid_plan, state);
 
     assert!(graph_result.is_err());
@@ -139,7 +148,7 @@ async fn test_error_missing_required_params() {
         }],
     };
 
-    let state = create_test_state();
+    let (state, _, _) = create_test_state().await;
     let graph_result = plan_to_graph::build_graph_from_plan(invalid_plan, state);
 
     assert!(graph_result.is_err());
@@ -200,7 +209,7 @@ async fn test_parallel_execution_structure() {
     assert_eq!(bottlenecks.longest_chain_length, 1); // No dependencies, so all have depth 1
 
     // Verify graph can be built
-    let state = create_test_state();
+    let (state, _, _) = create_test_state().await;
     let graph_result = plan_to_graph::build_graph_from_plan(parallel_plan, state);
 
     assert!(graph_result.is_ok());
@@ -211,13 +220,13 @@ async fn test_parallel_execution_structure() {
 /// Verifies that the orchestrate endpoint returns proper SSE stream structure
 #[tokio::test]
 async fn test_sse_streaming_structure() {
-    let state = create_test_state();
+    let (state, chat_db, bridge_manager) = create_test_state().await;
     let request = OrchestrationRequest {
         goal: "Write a test".to_string(),
     };
 
     // This will fail if Gemini API is not available, but we test structure
-    let result = orchestrate(State(state), Json(request)).await;
+    let result = orchestrate(State((state, chat_db, bridge_manager)), Json(request)).await;
 
     match result {
         Ok(response) => {
@@ -353,7 +362,7 @@ async fn test_complex_dependency_graph() {
     assert_eq!(bottlenecks.longest_chain_length, 3); // step_1 -> step_2/3 -> step_4
 
     // Verify graph can be built
-    let state = create_test_state();
+    let (state, _, _) = create_test_state().await;
     let graph_result = plan_to_graph::build_graph_from_plan(diamond_plan, state);
 
     assert!(graph_result.is_ok());
@@ -368,7 +377,7 @@ async fn test_empty_plan_handling() {
     };
 
     // Empty plan should fail validation or graph building
-    let state = create_test_state();
+    let (state, _, _) = create_test_state().await;
     let graph_result = plan_to_graph::build_graph_from_plan(empty_plan, state);
 
     assert!(graph_result.is_err());
@@ -509,14 +518,14 @@ async fn test_invalid_content_from_reference() {
 async fn test_error_propagation_planner_to_orchestrator() {
     // Create a request that would fail at the planner stage
     // (e.g., API key missing, API unavailable)
-    let state = create_test_state();
+    let (state, chat_db, bridge_manager) = create_test_state().await;
     let request = OrchestrationRequest {
         goal: "Test goal".to_string(),
     };
 
     // The orchestrate endpoint should handle planner errors gracefully
     // If the planner fails, it should return an error in the SSE stream, not panic
-    let result = orchestrate(State(state), Json(request)).await;
+    let result = orchestrate(State((state, chat_db, bridge_manager)), Json(request)).await;
 
     // Should return Ok(Response) even if planner fails (errors are in SSE stream)
     // The response structure should still be valid
@@ -572,7 +581,7 @@ async fn test_execution_error_handling_structure() {
     // This is tested in unit tests for CreateFileTask
 
     // Graph building should succeed if validation passes (it doesn't check context values at build time)
-    let state = create_test_state();
+    let (state, _, _) = create_test_state().await;
     let validation_passed = problematic_plan.validate().is_ok();
 
     // Whether validation passes or fails, graph building should handle it appropriately

@@ -42,6 +42,16 @@ npm install
 npm run dev
 ```
 
+## Gemini Authentication (CLI-Only Workflow)
+
+We do **not** call the hosted Gemini HTTP API. Instead, the backend shells out to the official Gemini CLI that is authenticated via your Google account. Make sure you complete these steps on the host machine **before** starting Docker:
+
+1. Install the Gemini CLI globally (see Google’s instructions, usually `npm install -g @google/gemini-cli`).
+2. Run `gemini auth login` locally and finish the browser-based Google sign-in.
+3. Confirm the CLI created credentials under `~/.gemini/` (files such as `oauth_creds.json` and `google_accounts.json`).
+
+The Docker setup mounts `~/.gemini` into the backend container (`/root/.gemini`), so the running backend automatically reuses your signed-in session. Because of this flow **you do not need** (and should not set) `GEMINI_API_KEY` unless you deliberately switch to API-key mode.
+
 ## What's Working
 
 ✅ Rust backend with Axum serving REST API

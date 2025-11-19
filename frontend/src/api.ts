@@ -36,6 +36,7 @@ export interface MessageResponse {
 
 export interface QueryRequest {
   query: string;
+  conversation_id?: string;
 }
 
 export interface QueryResponse {
@@ -266,6 +267,101 @@ export const api = {
     });
     return handleResponse<OrchestratorConfig>(response);
   },
+
+  // Chat API
+  async listConversations(): Promise<Conversation[]> {
+    const response = await fetch(`${API_URL}/api/chat/conversations`);
+    return handleResponse<Conversation[]>(response);
+  },
+
+  async createConversation(request: CreateConversationRequest = {}): Promise<Conversation> {
+    const response = await fetch(`${API_URL}/api/chat/conversations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    });
+    return handleResponse<Conversation>(response);
+  },
+
+  async getConversation(id: string): Promise<ConversationWithMessages> {
+    const response = await fetch(`${API_URL}/api/chat/conversations/${id}`);
+    return handleResponse<ConversationWithMessages>(response);
+  },
+
+  async deleteConversation(id: string): Promise<void> {
+    const response = await fetch(`${API_URL}/api/chat/conversations/${id}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      throw new ApiError(
+        `HTTP ${response.status}: ${response.statusText}`,
+        response.status
+      );
+    }
+  },
+
+  async updateConversationTitle(id: string, title: string): Promise<Conversation> {
+    const response = await fetch(`${API_URL}/api/chat/conversations/${id}/title`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title }),
+    });
+    return handleResponse<Conversation>(response);
+  },
+
+  // Simple chat API (uses Gemini CLI directly)
+  async simpleChat(
+    message: string,
+    conversationId?: string,
+    model?: string
+  ): Promise<{ response: string; success: boolean; conversation_id: string }> {
+    const response = await fetch(`${API_URL}/api/simple-chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message,
+        conversation_id: conversationId,
+        model,
+      }),
+    });
+    return handleResponse<{ response: string; success: boolean; conversation_id: string }>(
+      response
+    );
+  },
+
+  // Simple chat API with image uploads (multipart)
+  async simpleChatWithImages(
+    message: string,
+    images: File[],
+    conversationId?: string,
+    model?: string
+  ): Promise<{ response: string; success: boolean; conversation_id: string }> {
+    const formData = new FormData();
+    formData.append('message', message);
+    if (conversationId) {
+      formData.append('conversation_id', conversationId);
+    }
+    if (model) {
+      formData.append('model', model);
+    }
+    images.forEach((image) => {
+      formData.append('images', image);
+    });
+
+    const response = await fetch(`${API_URL}/api/simple-chat/multipart`, {
+      method: 'POST',
+      body: formData,
+    });
+    return handleResponse<{ response: string; success: boolean; conversation_id: string }>(
+      response
+    );
+  },
 };
 
 // File system types
@@ -360,6 +456,35 @@ export interface OrchestratorConfig {
   max_goal_length: number;
   plan_timeout_secs: number;
   max_parallel_tasks: number;
+}
+
+// Chat API Types
+export interface Conversation {
+  id: string;
+  title: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface Message {
+  id: string;
+  conversation_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: number;
+}
+
+export interface CreateConversationRequest {
+  title?: string;
+}
+
+export interface ConversationWithMessages {
+  conversation: Conversation;
+  messages: Message[];
+}
+
+export interface UpdateTitleRequest {
+  title: string;
 }
 
 // WebSocket message type

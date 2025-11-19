@@ -1,0 +1,63 @@
+# Vision: Chat and Coding Workflow Manager for CLI LLMs
+
+## Core Concept
+
+A chat and coding workflow manager that uses CLI LLMs (like Gemini CLI) and can be managed remotely. This solves two problems with one solution:
+
+1. **CLI tools lack GUI/history**: Terminal-only tools don't provide conversation history, visual interfaces, or easy searchability
+2. **Can't manage code remotely from phone**: CLI workflows are desktop-bound - there's no way to review, manage, or continue work from a phone/tablet remotely
+
+## The "Two Birds, One Stone" Approach
+
+By wrapping CLI tools in a web interface with remote access, we solve both problems simultaneously:
+- **GUI/History Layer**: Web interface adds conversation history, searchable past interactions, and visual workflow management
+- **Remote Access**: Manage and monitor CLI agents from anywhere via phone, tablet, or other devices
+- **Local-First**: Agents still execute locally on your machine, keeping your data private and secure
+
+## Value Proposition
+
+### Primary Value: Enhanced CLI Experience
+- Better UX for CLI LLM tools (visual interface, history, search)
+- Conversation persistence across sessions
+- Visual orchestration of CLI workflows
+
+### Secondary Value: Remote Access
+- Monitor agent executions from phone/tablet
+- Review code changes and outputs remotely
+- Continue conversations or start new ones from any device
+- Note: Full coding workflows on phone are challenging - focus is on monitoring/review, not active development
+
+## Technical Approach
+
+- **Wrap, Don't Rebuild**: Leverage existing CLI tools (Gemini CLI, Claude Code, Ollama, etc.) rather than reimplementing them
+- **Web Interface**: React-based UI accessible from any device
+- **Local Execution**: CLI agents run on local machine, web UI provides remote interface
+- **Streaming**: Real-time output streaming for immediate feedback
+
+## Target Users
+
+- Developers working with CLI-based LLM tools who want better UX
+- Users who want to manage agents from phone/tablet while away from their computer
+- Teams managing agent-based workflows who need remote collaboration
+- Users needing visual orchestration of CLI agents with mobile/remote access
+
+## Key Strengths
+
+✅ **Solves Real Pain Points**: Addresses legitimate frustrations with CLI-only tools
+✅ **Reuses Existing Tools**: Leverages proven CLI LLMs rather than rebuilding
+✅ **Local-First Privacy**: Data stays on your machine, only UI is accessed remotely
+✅ **Flexible Integration**: Any CLI tool can be wrapped, not limited to specific LLMs
+
+## Important Considerations
+
+⚠️ **Security**: Remote access exposes CLI execution - needs careful authentication and isolation
+⚠️ **Mobile UX**: Full terminals/coding on small screens has limitations - focus on monitoring/review vs active coding
+⚠️ **Complexity**: Adding web UI + remote access + CLI execution creates operational overhead
+
+## Vision Focus
+
+**Primary**: Better UX/history for CLI tools (local-first experience)
+**Secondary**: Remote monitoring/review capabilities (enhancement, not replacement)
+
+This vision optimizes for improving the CLI experience locally, with remote access as a powerful enhancement for monitoring and light management tasks rather than attempting to enable full coding workflows on mobile devices.
+

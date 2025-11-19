@@ -2,16 +2,15 @@
 //!
 //! Contains HTTP request handlers for agent CRUD operations.
 
+use crate::api::utils::RouterState;
 use crate::error::AppError;
-use crate::state::{Agent, AgentId, AgentStatus, AgentType, AppState};
+use crate::state::{Agent, AgentId, AgentStatus, AgentType};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// Agent response type
 #[derive(Debug, Serialize)]
@@ -77,7 +76,7 @@ pub struct UpdateAgentRequest {
 
 /// GET /api/agents - List all agents
 pub async fn list_agents(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
 ) -> Result<Json<AgentsListResponse>, AppError> {
     let state = state.read().await;
     let agents: Vec<AgentResponse> = state
@@ -94,7 +93,7 @@ pub async fn list_agents(
 
 /// GET /api/agents/:id - Get a specific agent
 pub async fn get_agent(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
     Path(id): Path<AgentId>,
 ) -> Result<Json<AgentResponse>, AppError> {
     let state = state.read().await;
@@ -108,7 +107,7 @@ pub async fn get_agent(
 
 /// POST /api/agents - Create a new agent
 pub async fn create_agent(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
     Json(request): Json<CreateAgentRequest>,
 ) -> Result<(StatusCode, Json<AgentResponse>), AppError> {
     let id = Agent::generate_id();
@@ -134,7 +133,7 @@ pub async fn create_agent(
 
 /// PUT /api/agents/:id - Update an agent
 pub async fn update_agent(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
     Path(id): Path<AgentId>,
     Json(request): Json<UpdateAgentRequest>,
 ) -> Result<Json<AgentResponse>, AppError> {
@@ -170,7 +169,7 @@ pub async fn update_agent(
 
 /// DELETE /api/agents/:id - Delete an agent
 pub async fn delete_agent(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
     Path(id): Path<AgentId>,
 ) -> Result<Json<MessageResponse>, AppError> {
     let mut state = state.write().await;
@@ -186,7 +185,7 @@ pub async fn delete_agent(
 
 /// POST /api/agents/:id/start - Start an agent
 pub async fn start_agent(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
     Path(id): Path<AgentId>,
 ) -> Result<Json<AgentResponse>, AppError> {
     let mut state = state.write().await;
@@ -204,7 +203,7 @@ pub async fn start_agent(
 
 /// POST /api/agents/:id/stop - Stop an agent
 pub async fn stop_agent(
-    State(state): State<Arc<RwLock<AppState>>>,
+    State((state, _, _)): State<RouterState>,
     Path(id): Path<AgentId>,
 ) -> Result<Json<AgentResponse>, AppError> {
     let mut state = state.write().await;
@@ -223,16 +222,28 @@ pub async fn stop_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::utils::RouterState;
+    use crate::chat::ChatDb;
     use crate::state::AppState;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
 
-    fn create_test_state() -> Arc<RwLock<AppState>> {
-        Arc::new(RwLock::new(AppState::new()))
+    async fn create_test_router_state() -> RouterState {
+        let app_state = Arc::new(RwLock::new(AppState::new()));
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let chat_db = ChatDb::new(db_path.to_str().unwrap())
+            .await
+            .expect("Failed to create test database");
+        let bridge_manager = Arc::new(crate::chat::BridgeManager::new());
+        (app_state, Arc::new(chat_db), bridge_manager)
     }
 
     #[tokio::test]
     async fn test_list_agents_empty() {
-        let state = create_test_state();
-        let result = list_agents(State(state)).await;
+        let router_state = create_test_router_state().await;
+        let result = list_agents(State(router_state)).await;
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.count, 0);
@@ -241,14 +252,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_agent() {
-        let state = create_test_state();
+        let router_state = create_test_router_state().await;
         // Use Gemini type which has a default command configured
         let request = CreateAgentRequest {
             name: "Test Agent".to_string(),
             agent_type: AgentType::Gemini,
         };
 
-        let result = create_agent(State(state.clone()), Json(request)).await;
+        let result = create_agent(State(router_state.clone()), Json(request)).await;
         assert!(
             result.is_ok(),
             "Agent creation should succeed with Gemini type"
@@ -258,7 +269,7 @@ mod tests {
         assert_eq!(response.name, "Test Agent");
 
         // Verify agent is in list
-        let list_result = list_agents(State(state)).await;
+        let list_result = list_agents(State(router_state.clone())).await;
         assert!(list_result.is_ok());
         let list_response = list_result.unwrap();
         assert_eq!(list_response.count, 1);
@@ -266,8 +277,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_agent_not_found() {
-        let state = create_test_state();
-        let result = get_agent(State(state), Path("nonexistent".to_string())).await;
+        let router_state = create_test_router_state().await;
+        let result = get_agent(State(router_state), Path("nonexistent".to_string())).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             AppError::AgentNotFound(_) => {

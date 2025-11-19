@@ -1,0 +1,288 @@
+Daytona Integration Opportunity
+==============================
+
+This document explores how Daytona (https://www.daytona.io/) could enhance the 
+agent-manager-gui project by providing secure, isolated cloud sandboxes for 
+agent execution.
+
+OVERVIEW
+--------
+
+Daytona is a platform that provides secure, isolated sandbox environments 
+("sandboxes") in the cloud that can be controlled programmatically via Python 
+or TypeScript SDKs. Each sandbox is an isolated container where code can be 
+executed safely, then automatically cleaned up.
+
+WHAT IS DAYTONA?
+----------------
+
+Daytona provides:
+- Cloud-based isolated sandboxes (containers) for code execution
+- Python and TypeScript SDKs for programmatic control
+- REST API for managing sandboxes
+- Automatic cleanup and resource management
+- Built-in security and isolation
+
+Key Features:
+- Process execution: Run commands and code inside sandboxes
+- File system operations: Read/write files in isolated environment
+- Git operations: Clone repos, manage branches
+- Log streaming: Real-time output from sandbox processes
+- PTY (Pseudo Terminal): Interactive terminal access
+- Network limits: Controlled network access
+
+HOW IT RELATES TO OUR PROJECT
+------------------------------
+
+Current Architecture:
+  User → Web UI → Rust Backend → Spawns local CLI process
+                                      ↓
+                                Runs on host machine
+
+Potential Architecture (with Daytona):
+  User → Web UI → Rust Backend → Option A: Local execution (current)
+                                → Option B: Daytona sandbox (new)
+                                      ↓
+                                Runs in isolated cloud container
+
+KEY BENEFITS FOR OUR PROJECT
+-----------------------------
+
+1. Resource Isolation
+   - Problem: Running multiple agents locally consumes CPU/memory on host machine
+   - Solution: Offload heavy workloads to Daytona sandboxes
+   - Use Case: When running multiple parallel orchestrations or large models
+
+2. Security for Untrusted Code
+   - Problem: User-submitted queries execute directly on host machine
+   - Solution: Run potentially risky commands in isolated Daytona sandboxes
+   - Use Case: Multi-user scenarios or when allowing arbitrary command execution
+
+3. Remote Execution Without Infrastructure Management
+   - Problem: Managing remote servers for agent execution is complex
+   - Solution: Use Daytona's cloud sandboxes instead of managing own servers
+   - Use Case: Scaling beyond local machine capacity
+
+4. Multi-User Isolation
+   - Problem: Multiple users running agents could conflict or interfere
+   - Solution: Each user/workflow gets their own isolated Daytona sandbox
+   - Use Case: Team collaboration or public-facing deployments
+
+5. Clean Resource Management
+   - Problem: Long-running processes or failed cleanup can leave resources
+   - Solution: Daytona automatically cleans up sandboxes after execution
+   - Use Case: Ensuring no resource leaks from agent execution
+
+POTENTIAL INTEGRATION APPROACH
+-------------------------------
+
+Option 1: Hybrid Execution Mode
+  - Add configuration flag: "execution_mode" (local | daytona | auto)
+  - Local: Current behavior (spawn processes on host)
+  - Daytona: Route execution to Daytona sandbox
+  - Auto: Choose based on workload size or user preference
+
+Option 2: Agent-Level Configuration
+  - Each agent can specify execution backend
+  - Some agents always run locally (trusted, simple)
+  - Some agents always run in sandbox (untrusted, heavy)
+  - User can override per execution
+
+Option 3: Workload-Based Routing
+  - Light queries → Local execution (fast, no overhead)
+  - Heavy queries → Daytona sandbox (isolated, scalable)
+  - Untrusted input → Always Daytona (security)
+
+IMPLEMENTATION CONSIDERATIONS
+------------------------------
+
+Backend Changes Needed:
+1. Add Daytona SDK dependency (Python or TypeScript, or Rust client if available)
+2. Create new executor: `DaytonaExecutor` (similar to `StreamingCliExecutor`)
+3. Add configuration for Daytona API key and settings
+4. Modify agent execution routing to support multiple backends
+5. Add UI toggle/configuration for execution mode
+
+File Structure (if implemented):
+- backend/src/executor/daytona.rs - Daytona sandbox executor
+- backend/src/state/config.rs - Add DaytonaConfig struct
+- backend/src/api/utils.rs - Add execution mode selection logic
+
+Frontend Changes Needed:
+1. Add execution mode selector in agent configuration
+2. Show execution backend in agent status/UI
+3. Add settings for Daytona API key (if user-configurable)
+
+API Integration Example (Conceptual):
+```rust
+// backend/src/executor/daytona.rs (conceptual, not implemented)
+pub struct DaytonaExecutor {
+    client: DaytonaClient,
+    api_key: String,
+}
+
+impl DaytonaExecutor {
+    pub async fn execute(
+        &self,
+        agent: &Agent,
+        query: &str,
+    ) -> Result<String, ExecutionError> {
+        // Create sandbox
+        let sandbox = self.client.create_sandbox().await?;
+        
+        // Build command (e.g., "gemini -p 'query'")
+        let command = self.build_command(agent, query);
+        
+        // Execute in sandbox
+        let response = sandbox.process.code_run(&command).await?;
+        
+        // Clean up
+        sandbox.delete().await?;
+        
+        Ok(response.result)
+    }
+}
+```
+
+USE CASES WHERE DAYTONA WOULD HELP
+-----------------------------------
+
+1. Heavy Workloads
+   - Running large language models that consume significant resources
+   - Parallel orchestration of many tasks simultaneously
+   - Long-running agent workflows
+
+2. Multi-User Scenarios
+   - Team members running agents concurrently
+   - Public API where users submit arbitrary queries
+   - Shared infrastructure where isolation is critical
+
+3. Untrusted Input
+   - User-submitted goals that generate complex plans
+   - Arbitrary command execution requests
+   - Experimental or beta features
+
+4. Scaling Beyond Local Capacity
+   - When local machine resources are exhausted
+   - Need for guaranteed resource availability
+   - Burst capacity for peak usage
+
+5. Development/Testing
+   - Testing agent execution in clean environments
+   - Reproducible execution environments
+   - CI/CD integration for agent workflows
+
+CURRENT PROJECT STATUS
+----------------------
+
+Current Implementation:
+- ✅ Local CLI process execution (StreamingCliExecutor)
+- ✅ Graph-flow parallel orchestration
+- ✅ Agent management and configuration
+- ✅ Web UI for remote access
+
+What Daytona Would Add:
+- ⏳ Optional cloud-based execution backend
+- ⏳ Resource isolation for heavy workloads
+- ⏳ Security for untrusted code execution
+- ⏳ Scalability beyond local machine
+
+INTEGRATION PRIORITY
+--------------------
+
+Low Priority (Future Enhancement):
+- Current local-first architecture works well for single-user scenarios
+- Daytona integration is a "nice to have" for scaling and security
+- Should be considered when:
+  * Multi-user support is needed
+  * Resource constraints become an issue
+  * Security requirements increase
+  * Scaling beyond local machine is necessary
+
+RECOMMENDED APPROACH
+--------------------
+
+Phase 1: Research & Planning (Current)
+- Document Daytona capabilities and integration approach
+- Identify specific use cases where it would help
+- Design architecture for hybrid execution
+
+Phase 2: Proof of Concept (Future)
+- Implement basic DaytonaExecutor
+- Test with simple agent execution
+- Compare performance vs local execution
+
+Phase 3: Full Integration (Future)
+- Add execution mode configuration
+- Integrate with existing executor system
+- Add UI controls for execution backend selection
+- Test with real workloads
+
+Phase 4: Production (Future)
+- Add monitoring and metrics
+- Optimize sandbox lifecycle management
+- Add error handling and retry logic
+- Document for users
+
+CONFIGURATION EXAMPLE (Conceptual)
+-----------------------------------
+
+```rust
+// backend/src/state/config.rs (conceptual)
+pub struct ExecutionConfig {
+    pub default_mode: ExecutionMode,
+    pub daytona: Option<DaytonaConfig>,
+}
+
+pub enum ExecutionMode {
+    Local,      // Always use local execution
+    Daytona,    // Always use Daytona sandbox
+    Auto,       // Choose based on workload
+}
+
+pub struct DaytonaConfig {
+    pub api_key: String,
+    pub default_language: String,
+    pub timeout_secs: u64,
+}
+```
+
+AGENT CONFIGURATION EXAMPLE (Conceptual)
+-----------------------------------------
+
+```rust
+// Agent could specify execution preference
+pub struct AgentConfig {
+    // ... existing fields ...
+    pub execution_backend: Option<ExecutionBackend>, // None = use default
+}
+
+pub enum ExecutionBackend {
+    Local,
+    Daytona,
+}
+```
+
+RESOURCES
+---------
+
+- Daytona Documentation: https://www.daytona.io/docs/
+- Python SDK: `pip install daytona`
+- TypeScript SDK: `npm install @daytonaio/sdk`
+- API Reference: Available in Daytona dashboard
+
+NOTES
+-----
+
+- This is a research/planning document - no code changes have been made
+- Daytona integration is optional and not required for core functionality
+- Current local-first architecture remains the primary execution model
+- Daytona would be an enhancement for specific use cases (scaling, security, isolation)
+
+RELATED DOCUMENTS
+------------------
+
+- docs/graph_flow_parallel_orchestration.txt - Current execution architecture
+- docs/ROADMAP.txt - Overall project roadmap
+- docs/NEXT_STEPS.md - Immediate development priorities
+

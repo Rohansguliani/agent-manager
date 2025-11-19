@@ -4,6 +4,7 @@
 //! Provides endpoints for agent CRUD operations and real-time status updates.
 
 mod api;
+mod chat;
 mod config;
 mod error;
 mod executor;
@@ -83,8 +84,22 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env();
     info!("Configuration loaded: {:?}", config);
 
+    // Initialize chat database
+    let chat_db = chat::ChatDb::new(&config.persistence.db_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to initialize chat database: {}", e))?;
+    let chat_db = Arc::new(chat_db);
+    info!(
+        "Chat database initialized at: {}",
+        config.persistence.db_path
+    );
+
     // Initialize application state
     let app_state = Arc::new(RwLock::new(AppState::new()));
+
+    // Initialize bridge manager (will manage Node.js sidecar processes)
+    let bridge_manager = Arc::new(chat::BridgeManager::new());
+    info!("Bridge manager initialized");
 
     // Try to load agents from default path
     let default_path = state::persistence::AgentRegistry::default_path();
@@ -100,6 +115,12 @@ async fn main() -> anyhow::Result<()> {
         // Health check and hello world
         .route("/", get(hello_world))
         .route("/api/health", get(health_check))
+        // Simple chat API (uses Gemini CLI directly)
+        .route("/api/simple-chat", post(api::simple_chat::simple_chat))
+        .route(
+            "/api/simple-chat/multipart",
+            post(api::simple_chat_multipart::simple_chat_multipart),
+        )
         // Agent management API
         .route(
             "/api/agents",
@@ -115,6 +136,19 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/agents/:id/stop", post(api::agents::stop_agent))
         .route("/api/agents/:id/query", post(api::queries::query_agent))
         .route("/api/query/stream", post(api::queries::query_stream))
+        // Chat API
+        .route(
+            "/api/chat/conversations",
+            get(api::chat::list_conversations).post(api::chat::create_conversation),
+        )
+        .route(
+            "/api/chat/conversations/:id",
+            get(api::chat::get_conversation).delete(api::chat::delete_conversation),
+        )
+        .route(
+            "/api/chat/conversations/:id/title",
+            axum::routing::put(api::chat::update_conversation_title),
+        )
         // File system API
         .route("/api/files", get(api::list_files))
         .route(
@@ -153,7 +187,10 @@ async fn main() -> anyhow::Result<()> {
             }),
         )
         .layer(CorsLayer::permissive()) // Allow CORS for development
-        .with_state(app_state);
+        .with_state((app_state, chat_db, bridge_manager.clone()));
+
+    // Clone bridge_manager for shutdown handler (before it's moved into router state)
+    let bridge_manager_for_shutdown = bridge_manager.clone();
 
     // Bind to address from config
     let addr: SocketAddr = config
@@ -168,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Setup graceful shutdown
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(bridge_manager_for_shutdown))
         .await?;
 
     info!("Server shutdown complete");
@@ -176,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Handle graceful shutdown signals (Ctrl+C, SIGTERM)
-async fn shutdown_signal() {
+async fn shutdown_signal(bridge_manager: Arc<chat::BridgeManager>) {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
@@ -202,6 +239,11 @@ async fn shutdown_signal() {
             info!("Received SIGTERM, shutting down gracefully...");
         },
     }
+
+    // Clean up all processes before shutdown
+    info!("Cleaning up all bridge processes...");
+    bridge_manager.kill_all_processes().await;
+    info!("Process cleanup complete");
 }
 
 async fn hello_world() -> Json<HelloResponse> {

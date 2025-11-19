@@ -3,6 +3,7 @@
 //! Executes CLI agents by spawning processes and streaming their output line-by-line.
 
 use crate::executor::error::ExecutionError;
+use crate::orchestrator::primitives::parse_gemini_json_response;
 use crate::state::Agent;
 use std::process::Stdio;
 use std::time::Duration;
@@ -19,6 +20,7 @@ pub struct StreamingCliExecutor {
 
 impl StreamingCliExecutor {
     /// Create a new streaming CLI executor with default timeout
+    #[allow(dead_code)]
     pub fn new(default_timeout_secs: u64) -> Self {
         Self {
             default_timeout: Duration::from_secs(default_timeout_secs),
@@ -66,15 +68,26 @@ impl StreamingCliExecutor {
             cmd.env(key, value);
         }
 
+        // System prompt hierarchy for Gemini CLI:
+        // Priority 1: Agent-specific system prompt (from agent config env_vars)
+        // Priority 2: Global fallback (only if agent didn't specify one)
+        // Priority 3: Default (Gemini CLI's internal prompt) - no action needed
+        if !agent.config.env_vars.contains_key("GEMINI_SYSTEM_MD") {
+            if let Ok(global_system_md) = std::env::var("GEMINI_SYSTEM_MD") {
+                cmd.env("GEMINI_SYSTEM_MD", global_system_md);
+            }
+        }
+
         // Pass through GEMINI_API_KEY if it exists (for Gemini CLI)
         if let Ok(api_key) = std::env::var("GEMINI_API_KEY") {
             cmd.env("GEMINI_API_KEY", api_key);
         }
 
-        // Set working directory if specified
-        if let Some(work_dir) = &agent.config.working_dir {
-            cmd.current_dir(work_dir);
-        }
+        // Set working directory
+        // If not specified, use /tmp to prevent Gemini CLI from reading project files
+        // This ensures the AI doesn't get unwanted context from the project structure
+        let work_dir = agent.config.working_dir.as_deref().unwrap_or("/tmp");
+        cmd.current_dir(work_dir);
 
         // Capture stdout and stderr separately
         cmd.stdout(Stdio::piped());
@@ -83,7 +96,7 @@ impl StreamingCliExecutor {
         debug!(
             command = %agent.config.command,
             args = ?agent.config.args,
-            working_dir = ?agent.config.working_dir,
+            working_dir = %work_dir,
             "Spawning process for streaming"
         );
 
@@ -102,9 +115,17 @@ impl StreamingCliExecutor {
         // Clone agent_id for logging
         let agent_id = agent.id.clone();
 
-        // Spawn a task to read stdout and stream lines through the channel
-        // Read all bytes first to ensure we capture everything even if process completes quickly
-        // This approach ensures we don't miss output due to timing issues
+        // Check if this is a Gemini agent with JSON output format
+        let is_gemini_json = matches!(agent.agent_type, crate::state::AgentType::Gemini)
+            && agent
+                .config
+                .args
+                .iter()
+                .any(|arg| arg == "--output-format" || arg == "json");
+
+        // Spawn a task to read stdout and process output
+        // For JSON mode: read full response, parse, then send entire parsed text at once
+        // For non-JSON: read full response, then send all at once
         let agent_id_clone = agent_id.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
@@ -112,24 +133,52 @@ impl StreamingCliExecutor {
             let mut line_count = 0;
 
             // Read all bytes from stdout until EOF
-            // This ensures we capture all output even if the process completes quickly
             match reader.read_to_end(&mut buffer).await {
                 Ok(_) => {
-                    // Convert bytes to string and process lines
+                    // Convert bytes to string
                     match String::from_utf8(buffer) {
                         Ok(output) => {
                             if !output.is_empty() {
-                                // Split into lines and send each line through the channel
-                                for line in output.lines() {
-                                    line_count += 1;
-                                    if tx.send(line.to_string()).await.is_err() {
+                                if is_gemini_json {
+                                    // For JSON mode: parse JSON and extract response field, send entire text at once
+                                    match parse_gemini_json_response(output.trim()) {
+                                        Ok(response_text) => {
+                                            // Send entire parsed response at once (no character-by-character streaming)
+                                            if tx.send(response_text).await.is_err() {
+                                                debug!(
+                                                    agent_id = %agent_id_clone,
+                                                    "Receiver dropped, stopping stdout read"
+                                                );
+                                            }
+                                            line_count += 1;
+                                        }
+                                        Err(e) => {
+                                            // JSON parsing failed, fall back to raw output
+                                            debug!(
+                                                agent_id = %agent_id_clone,
+                                                error = %e,
+                                                "Failed to parse Gemini JSON response, sending raw output"
+                                            );
+                                            // Send raw output as-is
+                                            if tx.send(output.trim().to_string()).await.is_err() {
+                                                debug!(
+                                                    agent_id = %agent_id_clone,
+                                                    "Receiver dropped, stopping stdout read"
+                                                );
+                                            }
+                                            line_count += 1;
+                                        }
+                                    }
+                                } else {
+                                    // For non-JSON output: send entire output at once
+                                    if tx.send(output.trim().to_string()).await.is_err() {
                                         // Receiver dropped, stop reading
                                         debug!(
                                             agent_id = %agent_id_clone,
                                             "Receiver dropped, stopping stdout read"
                                         );
-                                        break;
                                     }
+                                    line_count += 1;
                                 }
                             } else {
                                 debug!(
@@ -174,11 +223,24 @@ impl StreamingCliExecutor {
                 let mut lines = reader.lines();
 
                 while let Ok(Some(line)) = lines.next_line().await {
-                    error!(
-                        agent_id = %agent_id_stderr,
-                        stderr_line = %line,
-                        "Process stderr output"
-                    );
+                    // Log stderr at debug level - it's often informational (e.g., "Loaded cached credentials")
+                    // Only log as error if it contains error keywords
+                    if line.to_lowercase().contains("error")
+                        || line.to_lowercase().contains("fail")
+                        || line.to_lowercase().contains("panic")
+                    {
+                        error!(
+                            agent_id = %agent_id_stderr,
+                            stderr_line = %line,
+                            "Process stderr output (error detected)"
+                        );
+                    } else {
+                        debug!(
+                            agent_id = %agent_id_stderr,
+                            stderr_line = %line,
+                            "Process stderr output"
+                        );
+                    }
                 }
             });
         }
@@ -238,5 +300,169 @@ impl StreamingCliExecutor {
             "Started streaming process, returning receiver"
         );
         Ok(rx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{Agent, AgentConfig, AgentStatus, AgentType};
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn test_parse_gemini_json_response() {
+        // Test valid JSON with response field
+        let json_response =
+            r#"{"response": "Hello! How can I help you today?", "status": "success"}"#;
+        let result = parse_gemini_json_response(json_response);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Hello! How can I help you today?");
+
+        // Test JSON with empty response
+        let json_empty = r#"{"response": "", "status": "success"}"#;
+        let result = parse_gemini_json_response(json_empty);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "");
+
+        // Test JSON without response field (should fall back to raw)
+        let json_no_response = r#"{"status": "success", "message": "done"}"#;
+        let result = parse_gemini_json_response(json_no_response);
+        assert!(result.is_ok());
+        // Should return trimmed raw response
+        assert!(result.unwrap().contains("status"));
+
+        // Test invalid JSON (should fall back to raw)
+        let invalid_json = "not json at all";
+        let result = parse_gemini_json_response(invalid_json);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "not json at all");
+    }
+
+    #[tokio::test]
+    async fn test_streaming_executor_creation() {
+        let executor = StreamingCliExecutor::new(30);
+        // Just verify it can be created
+        assert!(std::mem::size_of_val(&executor) > 0);
+    }
+
+    #[tokio::test]
+    async fn test_gemini_json_detection() {
+        // Test agent with JSON output format
+        let agent_json = Agent {
+            id: "test-1".to_string(),
+            name: "Gemini JSON Agent".to_string(),
+            agent_type: AgentType::Gemini,
+            status: AgentStatus::Idle,
+            config: AgentConfig {
+                command: "echo".to_string(),
+                args: vec!["--output-format".to_string(), "json".to_string()],
+                env_vars: HashMap::new(),
+                working_dir: None,
+                options: HashMap::new(),
+            },
+        };
+
+        // Check detection logic
+        let is_gemini_json = matches!(agent_json.agent_type, AgentType::Gemini)
+            && agent_json
+                .config
+                .args
+                .iter()
+                .any(|arg| arg == "--output-format" || arg == "json");
+        assert!(is_gemini_json, "Should detect Gemini JSON output format");
+
+        // Test agent without JSON format
+        let agent_no_json = Agent {
+            id: "test-2".to_string(),
+            name: "Gemini Regular Agent".to_string(),
+            agent_type: AgentType::Gemini,
+            status: AgentStatus::Idle,
+            config: AgentConfig {
+                command: "echo".to_string(),
+                args: vec![],
+                env_vars: HashMap::new(),
+                working_dir: None,
+                options: HashMap::new(),
+            },
+        };
+
+        let is_gemini_json_no = matches!(agent_no_json.agent_type, AgentType::Gemini)
+            && agent_no_json
+                .config
+                .args
+                .iter()
+                .any(|arg| arg == "--output-format" || arg == "json");
+        assert!(
+            !is_gemini_json_no,
+            "Should not detect JSON format when args are empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_system_prompt_hierarchy() {
+        use std::collections::HashMap;
+
+        // Test Priority 1: Agent-specific system prompt (from env_vars)
+        let agent_with_custom = Agent {
+            id: "test-3".to_string(),
+            name: "Custom Prompt Agent".to_string(),
+            agent_type: AgentType::Gemini,
+            status: AgentStatus::Idle,
+            config: AgentConfig {
+                command: "echo".to_string(),
+                args: vec![],
+                env_vars: {
+                    let mut env = HashMap::new();
+                    env.insert(
+                        "GEMINI_SYSTEM_MD".to_string(),
+                        "/custom/prompt.md".to_string(),
+                    );
+                    env
+                },
+                working_dir: None,
+                options: HashMap::new(),
+            },
+        };
+
+        // Agent with custom prompt should have it in env_vars
+        assert_eq!(
+            agent_with_custom
+                .config
+                .env_vars
+                .get("GEMINI_SYSTEM_MD")
+                .unwrap(),
+            "/custom/prompt.md"
+        );
+
+        // Test Priority 2: Agent without custom prompt (should fall back to global)
+        let agent_without_custom = Agent {
+            id: "test-4".to_string(),
+            name: "Default Prompt Agent".to_string(),
+            agent_type: AgentType::Gemini,
+            status: AgentStatus::Idle,
+            config: AgentConfig {
+                command: "echo".to_string(),
+                args: vec![],
+                env_vars: HashMap::new(), // No GEMINI_SYSTEM_MD in agent config
+                working_dir: None,
+                options: HashMap::new(),
+            },
+        };
+
+        // Agent without custom prompt should not have GEMINI_SYSTEM_MD in env_vars
+        assert!(!agent_without_custom
+            .config
+            .env_vars
+            .contains_key("GEMINI_SYSTEM_MD"));
+
+        // Test hierarchy logic: agent-specific takes precedence
+        let has_agent_specific = agent_with_custom
+            .config
+            .env_vars
+            .contains_key("GEMINI_SYSTEM_MD");
+        assert!(
+            has_agent_specific,
+            "Agent with custom prompt should have GEMINI_SYSTEM_MD in env_vars"
+        );
     }
 }

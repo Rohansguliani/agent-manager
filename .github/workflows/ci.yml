@@ -2,80 +2,81 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
 
 jobs:
-  backend:
-    name: Backend Tests & Lint
+  backend-test:
+    name: Backend Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rs/toolchain@v1
         with:
-          components: clippy, rustfmt
-      
-      - name: Cache Cargo dependencies
+          toolchain: stable
+          override: true
+      - name: Cache cargo registry
         uses: actions/cache@v3
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            backend/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('backend/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-      
-      - name: Format check
-        working-directory: backend
-        run: cargo fmt --check
-      
-      - name: Clippy
-        working-directory: backend
+            ~/.cargo/registry
+            ~/.cargo/git
+            agent-manager-gui/backend/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run tests
+        working-directory: agent-manager-gui/backend
+        run: cargo test --all-features
+      - name: Run clippy
+        working-directory: agent-manager-gui/backend
         run: cargo clippy -- -D warnings
-      
-      - name: Build
-        working-directory: backend
-        run: cargo build --release
-      
-      - name: Test
-        working-directory: backend
-        run: cargo test --release
 
-  frontend:
-    name: Frontend Tests & Lint
+  frontend-test:
+    name: Frontend Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-      
+          cache-dependency-path: agent-manager-gui/frontend/package-lock.json
       - name: Install dependencies
-        working-directory: frontend
+        working-directory: agent-manager-gui/frontend
         run: npm ci
-      
-      - name: Lint
-        working-directory: frontend
-        run: npm run lint
-      
-      - name: Type check
-        working-directory: frontend
-        run: npm run type-check
-      
-      - name: Test
-        working-directory: frontend
+      - name: Run tests
+        working-directory: agent-manager-gui/frontend
         run: npm test -- --run
-      
+      - name: Run lint
+        working-directory: agent-manager-gui/frontend
+        run: npm run lint
+      - name: Type check
+        working-directory: agent-manager-gui/frontend
+        run: npm run type-check
       - name: Build
-        working-directory: frontend
+        working-directory: agent-manager-gui/frontend
         run: npm run build
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./agent-manager-gui
+          file: ./agent-manager-gui/backend/Dockerfile.dev
+          push: false
+          tags: agent-manager-backend:test
+      - name: Build frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./agent-manager-gui
+          file: ./agent-manager-gui/frontend/Dockerfile.dev
+          push: false
+          tags: agent-manager-frontend:test

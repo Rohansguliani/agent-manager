@@ -3,12 +3,16 @@
 //! Contains helper functions used by API handlers for validation,
 //! agent status management, and executor creation.
 
+use crate::chat::{BridgeManager, ChatDb};
 use crate::config::Config;
 use crate::error::AppError;
 use crate::executor::CliExecutor;
 use crate::state::{Agent, AgentId, AgentStatus, AppState};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// Router state type containing AppState, ChatDb, and BridgeManager
+pub type RouterState = (Arc<RwLock<AppState>>, Arc<ChatDb>, Arc<BridgeManager>);
 
 /// Maximum query length in characters
 pub const MAX_QUERY_LENGTH: usize = 10_000; // 10KB max query length

@@ -193,9 +193,16 @@ mod tests {
     use mockito::{Matcher, Server};
     use serial_test::serial;
 
+    fn build_test_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("Failed to build reqwest client for tests")
+    }
+
     #[tokio::test]
     async fn test_call_gemini_api_empty_api_key() {
-        let client = reqwest::Client::new();
+        let client = build_test_client();
         let result = call_gemini_api(&client, "", "test prompt", None, false).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("API key is empty"));
@@ -229,7 +236,7 @@ mod tests {
             .await;
 
         let base_url = &server.url();
-        let client = reqwest::Client::new();
+        let client = build_test_client();
         let result = call_gemini_api_with_base_url(
             &client,
             "test-key",
@@ -273,7 +280,7 @@ mod tests {
             .await;
 
         let base_url = &server.url();
-        let client = reqwest::Client::new();
+        let client = build_test_client();
         let result = call_gemini_api_with_base_url(
             &client,
             "test-key",
@@ -308,7 +315,7 @@ mod tests {
             .await;
 
         let base_url = &server.url();
-        let client = reqwest::Client::new();
+        let client = build_test_client();
         let result = call_gemini_api_with_base_url(
             &client,
             "test-key",
@@ -347,7 +354,7 @@ mod tests {
             .await;
 
         let base_url = &server.url();
-        let client = reqwest::Client::new();
+        let client = build_test_client();
         let result = call_gemini_api_with_base_url(
             &client,
             "test-key",
@@ -384,7 +391,7 @@ mod tests {
             .await;
 
         let base_url = &server.url();
-        let client = reqwest::Client::new();
+        let client = build_test_client();
         let result = call_gemini_api_with_base_url(
             &client,
             "test-key",
@@ -417,7 +424,7 @@ mod tests {
             .await;
 
         let base_url = &server.url();
-        let client = reqwest::Client::new();
+        let client = build_test_client();
         let result = call_gemini_api_with_base_url(
             &client,
             "test-key",
@@ -440,7 +447,7 @@ mod tests {
     async fn test_call_gemini_api_invalid_api_key_real() {
         // This will fail with a real HTTP request, but we're testing error handling
         // In a real scenario, this would hit the real API with an invalid key
-        let client = reqwest::Client::new();
+        let client = build_test_client();
         let result =
             call_gemini_api(&client, "invalid-key-12345", "test prompt", None, false).await;
         // Should return an error (either HTTP error or parsing error)
